@@ -6,3 +6,14 @@ export type HeadingItem = {
   endPos: number;
 };
 
+export interface ApiFormState {
+  name: string;
+  url: string;
+  method: 'GET' | 'POST';
+  headers: string;
+  body: string;
+  dataPath: string;
+}
+
+export type ApiTestResult = { success: boolean; value?: string; message: string } | null;
+

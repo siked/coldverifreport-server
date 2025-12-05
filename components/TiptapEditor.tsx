@@ -289,15 +289,6 @@ interface DataSourceMenuState {
   existingSource?: DataSourcePayload | null;
 }
 
-interface ApiFormState {
-  name: string;
-  url: string;
-  method: 'GET' | 'POST';
-  headers: string;
-  body: string;
-  dataPath: string;
-}
-
 const DataSourceMark = Mark.create({
   name: 'dataSource',
   inclusive: true,
@@ -522,17 +513,17 @@ import {
   ChevronUp,
   Tag as TagIcon,
   Database,
-  Plug,
-  FlaskConical,
   FileText,
   Copy,
   FileDown,
 } from 'lucide-react';
 import Modal from './Modal';
 import type { TemplateTag } from './TemplateTagList';
+import DataSourceApiPanel from './tiptap/DataSourceApiPanel';
+import DataSourceMenu from './tiptap/DataSourceMenu';
 import OutlineSidebar from './tiptap/OutlineSidebar';
 import TagSelectorPanel from './tiptap/TagSelectorPanel';
-import type { HeadingItem } from './tiptap/types';
+import type { ApiFormState, ApiTestResult, HeadingItem } from './tiptap/types';
 
 interface TiptapEditorProps {
   content: string;
@@ -804,7 +795,7 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
     dataPath: '',
   });
   const [isTestingApi, setIsTestingApi] = useState(false);
-  const [apiTestResult, setApiTestResult] = useState<{ success: boolean; value?: string; message: string } | null>(null);
+  const [apiTestResult, setApiTestResult] = useState<ApiTestResult>(null);
   
   // 页面格式定义（参考 @tiptap-pro/extension-pages）
   const PAGE_FORMATS = {
@@ -3232,49 +3223,19 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
       )}
       {/* 选择菜单：只在没有 activeDataSourcePanel 时显示（例如从右键菜单触发时） */}
       {dataSourceMenu && !activeDataSourcePanel && (
-        <div
-          className="fixed bg-white border rounded-lg shadow-lg py-1 z-50 min-w-[200px] data-source-popover"
-          style={getPopoverPosition(dataSourceMenu.x, dataSourceMenu.y, 220, 160, 10, 10)}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 border-b">
-            数据来源
-          </div>
-          <button
-            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center space-x-2"
-            onClick={(e) => {
-              e.stopPropagation();
-              setTagSearch('');
-              setActiveDataSourcePanel('tag');
-            }}
-          >
-            <TagIcon className="w-4 h-4" />
-            <span>标签值</span>
-          </button>
-          <button
-            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center space-x-2"
-            onClick={(e) => {
-              e.stopPropagation();
-              hydrateApiForm(dataSourceMenu.existingSource);
-              setActiveDataSourcePanel('api');
-            }}
-          >
-            <Database className="w-4 h-4" />
-            <span>接口数据</span>
-          </button>
-          {dataSourceMenu.existingSource && (
-            <button
-              className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center space-x-2 border-t mt-1"
-              onClick={(e) => {
-                e.stopPropagation();
-                removeDataSourceFromTarget(dataSourceMenu);
-              }}
-            >
-              <Trash2 className="w-4 h-4" />
-              <span>移除数据来源</span>
-            </button>
-          )}
-        </div>
+        <DataSourceMenu
+          position={getPopoverPosition(dataSourceMenu.x, dataSourceMenu.y, 220, 160, 10, 10)}
+          hasExistingSource={Boolean(dataSourceMenu.existingSource)}
+          onSelectTag={() => {
+            setTagSearch('');
+            setActiveDataSourcePanel('tag');
+          }}
+          onSelectApi={() => {
+            hydrateApiForm(dataSourceMenu.existingSource);
+            setActiveDataSourcePanel('api');
+          }}
+          onRemove={dataSourceMenu.existingSource ? () => removeDataSourceFromTarget(dataSourceMenu) : undefined}
+        />
       )}
       {dataSourceMenu && activeDataSourcePanel === 'tag' && (
         <TagSelectorPanel
@@ -3293,130 +3254,19 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
         />
       )}
       {dataSourceMenu && activeDataSourcePanel === 'api' && (
-        <div
-          className="fixed bg-white border rounded-lg shadow-2xl w-[420px] p-4 z-50 data-source-popover"
-          style={getPopoverPosition(dataSourceMenu.x, dataSourceMenu.y, 420, 500, 10, 10)}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <p className="text-sm font-semibold text-gray-800">接口数据</p>
-              <p className="text-xs text-gray-500">
-                支持 GET / POST，请先测试接口后再应用
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                setActiveDataSourcePanel(null);
-                setDataSourceMenu(null);
-              }}
-              className="p-1 rounded hover:bg-gray-100"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-          <div className="space-y-3">
-            <div>
-              <label className="text-xs text-gray-500 mb-1 block">接口名称（可选）</label>
-              <input
-                type="text"
-                value={apiForm.name}
-                onChange={(e) => setApiForm({ ...apiForm, name: e.target.value })}
-                className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-              />
-            </div>
-            <div>
-              <label className="text-xs text-gray-500 mb-1 block">接口地址</label>
-              <input
-                type="text"
-                value={apiForm.url}
-                onChange={(e) => setApiForm({ ...apiForm, url: e.target.value })}
-                className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                placeholder="https://example.com/api"
-              />
-            </div>
-            <div className="flex items-center space-x-2">
-              <div className="w-28">
-                <label className="text-xs text-gray-500 mb-1 block">请求方式</label>
-                <select
-                  value={apiForm.method}
-                  onChange={(e) =>
-                    setApiForm({ ...apiForm, method: e.target.value as ApiFormState['method'] })
-                  }
-                  className="w-full px-2 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                >
-                  <option value="GET">GET</option>
-                  <option value="POST">POST</option>
-                </select>
-              </div>
-              <div className="flex-1">
-                <label className="text-xs text-gray-500 mb-1 block">数据路径（可选）</label>
-                <input
-                  type="text"
-                  value={apiForm.dataPath}
-                  onChange={(e) => setApiForm({ ...apiForm, dataPath: e.target.value })}
-                  placeholder="如：data.items[0].value"
-                  className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                />
-              </div>
-            </div>
-            <div>
-              <label className="text-xs text-gray-500 mb-1 block">请求头（JSON，可选）</label>
-              <textarea
-                value={apiForm.headers}
-                onChange={(e) => setApiForm({ ...apiForm, headers: e.target.value })}
-                rows={2}
-                className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                placeholder='{"Authorization":"Bearer ***"}'
-              />
-            </div>
-            {apiForm.method === 'POST' && (
-              <div>
-                <label className="text-xs text-gray-500 mb-1 block">请求体（JSON，可选）</label>
-                <textarea
-                  value={apiForm.body}
-                  onChange={(e) => setApiForm({ ...apiForm, body: e.target.value })}
-                  rows={3}
-                  className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-                />
-              </div>
-            )}
-            <div className="flex items-center space-x-2">
-              <button
-                type="button"
-                onClick={testApiData}
-                disabled={isTestingApi}
-                className="flex-1 inline-flex items-center justify-center space-x-2 px-3 py-2 border rounded text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-              >
-                <FlaskConical className="w-4 h-4" />
-                <span>{isTestingApi ? '测试中...' : '测试接口'}</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleApplyApiData}
-                disabled={!apiTestResult?.success}
-                className="flex-1 inline-flex items-center justify-center space-x-2 px-3 py-2 bg-primary-600 text-white rounded text-sm hover:bg-primary-700 disabled:opacity-40"
-              >
-                <Plug className="w-4 h-4" />
-                <span>应用数据</span>
-              </button>
-            </div>
-            {apiTestResult && (
-              <div
-                className={`rounded px-3 py-2 text-sm ${
-                  apiTestResult.success ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'
-                }`}
-              >
-                {apiTestResult.message}
-                {apiTestResult.value && apiTestResult.success && (
-                  <div className="mt-1 text-xs text-gray-600 break-words">
-                    预览：{apiTestResult.value}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+        <DataSourceApiPanel
+          position={getPopoverPosition(dataSourceMenu.x, dataSourceMenu.y, 420, 500, 10, 10)}
+          apiForm={apiForm}
+          isTesting={isTestingApi}
+          testResult={apiTestResult}
+          onChangeForm={(patch) => setApiForm({ ...apiForm, ...patch })}
+          onTest={testApiData}
+          onApply={handleApplyApiData}
+          onClose={() => {
+            setActiveDataSourcePanel(null);
+            setDataSourceMenu(null);
+          }}
+        />
       )}
       {quickTagModal && (
         <QuickTagModal
