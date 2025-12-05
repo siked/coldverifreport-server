@@ -279,7 +279,7 @@ type ApiDataSource = {
   value?: string;
 };
 
-type DataSourcePayload = TagDataSource | ApiDataSource;
+type DataSourcePayload = TagDataSource | ApiDataSource | CalculationDataSource;
 
 interface DataSourceMenuState {
   x: number;
@@ -459,6 +459,20 @@ const formatTooltip = (payload: DataSourcePayload) => {
   if (payload.type === 'tag') {
     return `标签：${payload.tagName} (${payload.tagType})`;
   }
+  if (payload.type === 'calculation') {
+    const calcLabels: Record<CalculationDataSource['calculationType'], string> = {
+      add: '加法',
+      subtract: '减法',
+      multiply: '乘法',
+      divide: '除法',
+      modulo: '取余',
+      floor: '取整',
+      abs: '取绝对值',
+      max: '取最大值',
+      min: '取最小值',
+    };
+    return `运算：${calcLabels[payload.calculationType]} (${payload.tagName1}${payload.tagName2 ? `, ${payload.tagName2}` : ''})`;
+  }
   return `接口：${payload.name || payload.url}`;
 };
 
@@ -588,6 +602,7 @@ import DataSourceApiPanel from './tiptap/DataSourceApiPanel';
 import DataSourceMenu from './tiptap/DataSourceMenu';
 import OutlineSidebar from './tiptap/OutlineSidebar';
 import TagSelectorPanel, { TagFormattingOption } from './tiptap/TagSelectorPanel';
+import CalculationPanel, { CalculationDataSource } from './tiptap/CalculationPanel';
 import type { ApiFormState, ApiTestResult, HeadingItem } from './tiptap/types';
 
 interface TiptapEditorProps {
@@ -845,7 +860,7 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
   const [resizingSidebar, setResizingSidebar] = useState(false);
   const sidebarRef = useRef<HTMLDivElement | null>(null);
   const [dataSourceMenu, setDataSourceMenu] = useState<DataSourceMenuState | null>(null);
-  const [activeDataSourcePanel, setActiveDataSourcePanel] = useState<'tag' | 'api' | null>(null);
+  const [activeDataSourcePanel, setActiveDataSourcePanel] = useState<'tag' | 'api' | 'calculation' | null>(null);
   const [tagSearch, setTagSearch] = useState('');
   const [quickTagModal, setQuickTagModal] = useState<{
     type: TemplateTag['type'];
@@ -1894,6 +1909,96 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
     dataSourceMenu,
   ]);
 
+  // 计算运算结果
+  const calculateValue = useCallback(
+    (data: CalculationDataSource): string => {
+      const tag1 = tags.find((t) => t._id === data.tagId1);
+      if (!tag1) return '标签1不存在';
+
+      const val1 = typeof tag1.value === 'number' ? tag1.value : Number(tag1.value);
+      if (Number.isNaN(val1)) return '标签1无效数值';
+
+      if (data.tagId2) {
+        const tag2 = tags.find((t) => t._id === data.tagId2);
+        if (!tag2) return '标签2不存在';
+
+        const val2 = typeof tag2.value === 'number' ? tag2.value : Number(tag2.value);
+        if (Number.isNaN(val2)) return '标签2无效数值';
+
+        let result: number;
+        switch (data.calculationType) {
+          case 'add':
+            result = val1 + val2;
+            break;
+          case 'subtract':
+            result = val1 - val2;
+            break;
+          case 'multiply':
+            result = val1 * val2;
+            break;
+          case 'divide':
+            if (val2 === 0) return '除数不能为0';
+            result = val1 / val2;
+            break;
+          case 'modulo':
+            if (val2 === 0) return '除数不能为0';
+            result = val1 % val2;
+            break;
+          case 'max':
+            result = Math.max(val1, val2);
+            break;
+          case 'min':
+            result = Math.min(val1, val2);
+            break;
+          default:
+            return '未知运算类型';
+        }
+        return result.toFixed(data.decimals);
+      } else {
+        let result: number;
+        switch (data.calculationType) {
+          case 'floor':
+            result = Math.floor(val1);
+            break;
+          case 'abs':
+            result = Math.abs(val1);
+            break;
+          default:
+            return '未知运算类型';
+        }
+        return result.toFixed(data.decimals);
+      }
+    },
+    [tags]
+  );
+
+  const handleApplyCalculation = useCallback(
+    (data: CalculationDataSource) => {
+      if (!dataSourceMenu) return;
+
+      // 重新计算值（确保使用最新的标签值）
+      const calculatedValue = calculateValue(data);
+      const payload: CalculationDataSource = {
+        ...data,
+        value: calculatedValue,
+      };
+
+      if (dataSourceMenu.targetType === 'text' && dataSourceMenu.range) {
+        applyDataSourceToText(dataSourceMenu.range, payload, calculatedValue);
+      } else if (
+        dataSourceMenu.targetType === 'image' &&
+        typeof dataSourceMenu.imagePos === 'number'
+      ) {
+        // 运算类不支持图片
+        alert('运算类仅支持文本目标');
+        return;
+      }
+      setDataSourceMenu(null);
+      setActiveDataSourcePanel(null);
+    },
+    [calculateValue, applyDataSourceToText, dataSourceMenu]
+  );
+
   const getPopoverPosition = useCallback((x: number, y: number, width = 280, height = 260, offsetX = 10, offsetY = 10) => {
     if (typeof window === 'undefined') {
       return { left: x + offsetX, top: y + offsetY };
@@ -2777,11 +2882,13 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
           existingSource: existing,
         });
         // 根据现有数据来源类型直接打开对应面板
-        if (existing?.type === 'api') {
+        if (existing && existing.type === 'api') {
           hydrateApiForm(existing);
           setActiveDataSourcePanel('api');
+        } else if (existing && existing.type === 'calculation') {
+          setActiveDataSourcePanel('calculation');
         } else {
-          // 如果有数据来源但类型不是 api，则打开标签面板；如果没有数据来源，也打开标签面板
+          // 如果有数据来源但类型不是 api 或 calculation，则打开标签面板；如果没有数据来源，也打开标签面板
           setActiveDataSourcePanel('tag');
         }
       } else if (elementType === 'image') {
@@ -2806,11 +2913,13 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
             existingSource: existing,
           });
           // 根据现有数据来源类型直接打开对应面板
-          if (existing?.type === 'api') {
+          if (existing && existing.type === 'api') {
             hydrateApiForm(existing);
             setActiveDataSourcePanel('api');
+          } else if (existing && existing.type === 'calculation') {
+            setActiveDataSourcePanel('calculation');
           } else {
-            // 如果有数据来源但类型不是 api，则打开标签面板；如果没有数据来源，也打开标签面板
+            // 如果有数据来源但类型不是 api 或 calculation，则打开标签面板；如果没有数据来源，也打开标签面板
             setActiveDataSourcePanel('tag');
           }
         }
@@ -2861,7 +2970,10 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
 
     // 遍历文档，找到所有使用这些标签的数据来源并更新
     const markType = editor.state.schema.marks.dataSource;
-    const updates: Array<{ kind: 'text'; range: { from: number; to: number }; payload: TagDataSource } | { kind: 'image'; pos: number; payload: TagDataSource }> = [];
+    const updates: Array<
+      | { kind: 'text'; range: { from: number; to: number }; payload: TagDataSource | CalculationDataSource }
+      | { kind: 'image'; pos: number; payload: TagDataSource }
+    > = [];
     const visitedRanges = new Set<string>();
 
     editor.state.doc.descendants((node, pos) => {
@@ -2884,6 +2996,28 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
                     tagName: changedTag.name,
                     tagType: changedTag.type,
                     value: formatTagValue(changedTag, tagPayload.formatting),
+                  };
+                  updates.push({ kind: 'text', range, payload: updatedPayload });
+                }
+              }
+            }
+          } else if (payload?.type === 'calculation') {
+            const calcPayload = payload as CalculationDataSource;
+            // 检查运算类是否使用了变化的标签
+            const usesChangedTag =
+              changedTags.some((t) => t._id === calcPayload.tagId1) ||
+              (calcPayload.tagId2 && changedTags.some((t) => t._id === calcPayload.tagId2));
+            if (usesChangedTag) {
+              const range = getMarkRange(editor.state.doc.resolve(pos), markType);
+              if (range) {
+                const key = `${range.from}-${range.to}`;
+                if (!visitedRanges.has(key)) {
+                  visitedRanges.add(key);
+                  // 重新计算值
+                  const recalculatedValue = calculateValue(calcPayload);
+                  const updatedPayload: CalculationDataSource = {
+                    ...calcPayload,
+                    value: recalculatedValue,
                   };
                   updates.push({ kind: 'text', range, payload: updatedPayload });
                 }
@@ -2925,9 +3059,16 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
         sortedUpdates.forEach((update) => {
           if (update.kind === 'text') {
             const { range, payload } = update;
-            const tag = tags.find((t) => t._id === payload.tagId);
-            if (!tag) return;
-            const displayValue = formatTagValue(tag, payload.formatting);
+            let displayValue: string;
+            if (payload.type === 'tag') {
+              const tag = tags.find((t) => t._id === payload.tagId);
+              if (!tag) return;
+              displayValue = formatTagValue(tag, payload.formatting);
+            } else if (payload.type === 'calculation') {
+              displayValue = payload.value;
+            } else {
+              return;
+            }
             tr.insertText(displayValue, range.from, range.to);
             if (markType) {
               const mark = markType.create({
@@ -2958,7 +3099,7 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
     }
 
     prevTagsRef.current = tags;
-  }, [tags, editor, formatTagValue]);
+  }, [tags, editor, formatTagValue, calculateValue]);
 
   // 点击外部关闭页眉页脚菜单
   useEffect(() => {
@@ -3432,6 +3573,9 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
             hydrateApiForm(dataSourceMenu.existingSource);
             setActiveDataSourcePanel('api');
           }}
+          onSelectCalculation={() => {
+            setActiveDataSourcePanel('calculation');
+          }}
           onRemove={dataSourceMenu.existingSource ? () => removeDataSourceFromTarget(dataSourceMenu) : undefined}
         />
       )}
@@ -3467,6 +3611,21 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
             setActiveDataSourcePanel(null);
             setDataSourceMenu(null);
           }}
+        />
+      )}
+      {dataSourceMenu && activeDataSourcePanel === 'calculation' && (
+        <CalculationPanel
+          position={getPopoverPosition(dataSourceMenu.x, dataSourceMenu.y, 420, 500, 10, 10)}
+          targetType={dataSourceMenu.targetType}
+          tags={tags}
+          onApply={handleApplyCalculation}
+          onClose={() => {
+            setActiveDataSourcePanel(null);
+            setDataSourceMenu(null);
+          }}
+          existingSource={
+            dataSourceMenu.existingSource?.type === 'calculation' ? dataSourceMenu.existingSource : null
+          }
         />
       )}
       {quickTagModal && (

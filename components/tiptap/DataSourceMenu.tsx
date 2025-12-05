@@ -1,4 +1,4 @@
-import { Database, Tag as TagIcon, Trash2 } from 'lucide-react';
+import { Database, Tag as TagIcon, Trash2, Calculator } from 'lucide-react';
 import React from 'react';
 
 interface DataSourceMenuProps {
@@ -6,6 +6,7 @@ interface DataSourceMenuProps {
   hasExistingSource: boolean;
   onSelectTag: () => void;
   onSelectApi: () => void;
+  onSelectCalculation: () => void;
   onRemove?: () => void;
 }
 
@@ -14,6 +15,7 @@ export default function DataSourceMenu({
   hasExistingSource,
   onSelectTag,
   onSelectApi,
+  onSelectCalculation,
   onRemove,
 }: DataSourceMenuProps) {
   return (
@@ -42,6 +44,16 @@ export default function DataSourceMenu({
       >
         <Database className="w-4 h-4" />
         <span>接口数据</span>
+      </button>
+      <button
+        className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center space-x-2"
+        onClick={(e) => {
+          e.stopPropagation();
+          onSelectCalculation();
+        }}
+      >
+        <Calculator className="w-4 h-4" />
+        <span>运算类</span>
       </button>
       {hasExistingSource && onRemove && (
         <button
