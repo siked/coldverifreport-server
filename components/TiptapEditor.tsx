@@ -151,6 +151,69 @@ const CustomImage = Node.create({
   },
 });
 
+// 自定义 TableCell 扩展，支持 style 属性
+const CustomTableCell = TableCell.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      style: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('style'),
+        renderHTML: (attributes) => {
+          if (!attributes.style) {
+            return {};
+          }
+          return {
+            style: attributes.style,
+          };
+        },
+      },
+    };
+  },
+});
+
+// 自定义 TableRow 扩展，支持 style 属性
+const CustomTableRow = TableRow.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      style: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('style'),
+        renderHTML: (attributes) => {
+          if (!attributes.style) {
+            return {};
+          }
+          return {
+            style: attributes.style,
+          };
+        },
+      },
+    };
+  },
+});
+
+// 自定义 TableHeader 扩展，支持 style 属性
+const CustomTableHeader = TableHeader.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      style: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('style'),
+        renderHTML: (attributes) => {
+          if (!attributes.style) {
+            return {};
+          }
+          return {
+            style: attributes.style,
+          };
+        },
+      },
+    };
+  },
+});
+
 const DATA_SOURCE_ELEMENT_ATTR = 'data-source-element';
 const DATA_SOURCE_CLASS = 'data-source-highlight';
 const TEXT_DATA_SOURCE_TYPES: Array<TemplateTag['type']> = [
@@ -390,8 +453,39 @@ const createTurndown = () => {
       // 检查表格中是否有数据来源标记
       const hasDataSource = table.querySelector(`span[data-source], img[data-source]`);
       
-      // 如果有数据来源，使用 HTML 表格格式以保留标记
-      if (hasDataSource) {
+      // 检查表格是否有自定义样式（行间距、padding等）
+      const hasCustomStyles = (() => {
+        // 检查表格本身是否有 style 属性
+        if (table.getAttribute('style')) {
+          return true;
+        }
+        // 检查所有行是否有 style 属性
+        const rows = table.querySelectorAll('tr');
+        for (const row of rows) {
+          if (row.getAttribute('style')) {
+            return true;
+          }
+        }
+        // 检查所有单元格是否有 style 属性
+        const cells = table.querySelectorAll('td, th');
+        for (const cell of cells) {
+          const style = cell.getAttribute('style');
+          if (style) {
+            // 检查是否有行间距相关的样式（line-height, padding等）
+            const styleLower = style.toLowerCase();
+            if (styleLower.includes('line-height') || 
+                styleLower.includes('padding') ||
+                styleLower.includes('height') ||
+                styleLower.includes('min-height')) {
+              return true;
+            }
+          }
+        }
+        return false;
+      })();
+      
+      // 如果有数据来源或自定义样式，使用 HTML 表格格式以保留标记和样式
+      if (hasDataSource || hasCustomStyles) {
         // 克隆表格并处理单元格内容
         const clonedTable = table.cloneNode(true) as HTMLTableElement;
         const cells = clonedTable.querySelectorAll('td, th');
@@ -417,7 +511,7 @@ const createTurndown = () => {
         return '\n' + clonedTable.outerHTML + '\n';
       }
       
-      // 没有数据来源时，使用 markdown 表格格式
+      // 没有数据来源和自定义样式时，使用 markdown 表格格式
       const rows: string[] = [];
       
       const thead = table.querySelector('thead');
@@ -688,9 +782,9 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
       Table.configure({
         resizable: true,
       }),
-      TableRow,
-      TableHeader,
-      TableCell,
+      CustomTableRow,
+      CustomTableHeader,
+      CustomTableCell,
       TaskList,
       TaskItem.configure({
         nested: true,
@@ -1335,14 +1429,29 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
     dataSourceMenu,
   ]);
 
-  const getPopoverPosition = useCallback((x: number, y: number, width = 280, height = 260) => {
+  const getPopoverPosition = useCallback((x: number, y: number, width = 280, height = 260, offsetX = 10, offsetY = 10) => {
     if (typeof window === 'undefined') {
-      return { left: x, top: y };
+      return { left: x + offsetX, top: y + offsetY };
     }
-    return {
-      left: Math.max(8, Math.min(x, window.innerWidth - width - 8)),
-      top: Math.max(8, Math.min(y, window.innerHeight - height - 8)),
-    };
+    // 计算位置，在鼠标右下方显示，如果空间不够则调整
+    let left = x + offsetX;
+    let top = y + offsetY;
+    
+    // 如果右侧空间不够，显示在左侧
+    if (left + width > window.innerWidth - 8) {
+      left = x - width - offsetX;
+    }
+    
+    // 如果下方空间不够，显示在上方
+    if (top + height > window.innerHeight - 8) {
+      top = y - height - offsetY;
+    }
+    
+    // 确保不超出边界
+    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+    top = Math.max(8, Math.min(top, window.innerHeight - height - 8));
+    
+    return { left, top };
   }, []);
 
   const fetchApiValue = useCallback(async (config: ApiDataSource) => {
@@ -1668,6 +1777,12 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
       }
       
       if (imageNode && imageNode.type.name === 'image') {
+        // 如果图片有数据来源，不设置 selectedImage，避免触发其他菜单
+        if (imageNode.attrs.dataSource) {
+          setSelectedImage(null);
+          return;
+        }
+        
         // 查找对应的 DOM 元素
         const editorElement = editor.view.dom;
         const imageElements = editorElement.querySelectorAll('img');
@@ -1960,6 +2075,50 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
     const handleDataSourceClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null;
       if (!target) return;
+      
+      // 如果点击的是弹窗内部，不处理
+      if (target.closest('.data-source-popover') || target.closest('.fixed.bg-white.border.rounded-lg.shadow-lg')) {
+        return;
+      }
+      
+      // 检查是否是图片，并且有数据来源
+      const imgElement = target.closest('img');
+      if (imgElement && imgElement.hasAttribute('data-source')) {
+        event.preventDefault();
+        event.stopPropagation();
+        
+        let imagePos = -1;
+        editor.state.doc.descendants((node, pos) => {
+          if (node.type.name === 'image' && node.attrs.src === (imgElement as HTMLImageElement).src) {
+            imagePos = pos;
+            return false;
+          }
+          return true;
+        });
+        if (imagePos >= 0) {
+          const existing = getDataSourceForImage(imagePos);
+          // 关闭右键菜单（如果有）
+          setContextMenu(null);
+          // 直接打开对应的修改面板，不显示选择菜单
+          setDataSourceMenu({
+            x: event.clientX,
+            y: event.clientY,
+            targetType: 'image',
+            imagePos,
+            existingSource: existing,
+          });
+          // 根据现有数据来源类型直接打开对应面板
+          if (existing?.type === 'api') {
+            hydrateApiForm(existing);
+            setActiveDataSourcePanel('api');
+          } else {
+            // 如果有数据来源但类型不是 api，则打开标签面板；如果没有数据来源，也打开标签面板
+            setActiveDataSourcePanel('tag');
+          }
+        }
+        return;
+      }
+      
       const dsElement = target.closest(`[${DATA_SOURCE_ELEMENT_ATTR}]`) as HTMLElement | null;
       if (!dsElement) return;
 
@@ -1971,6 +2130,9 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
         const range = resolveRangeFromElement(dsElement);
         if (!range) return;
         const existing = getDataSourceAtRange(range);
+        // 关闭右键菜单（如果有）
+        setContextMenu(null);
+        // 直接打开对应的修改面板，不显示选择菜单
         setDataSourceMenu({
           x: event.clientX,
           y: event.clientY,
@@ -1978,10 +2140,12 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
           range,
           existingSource: existing,
         });
+        // 根据现有数据来源类型直接打开对应面板
         if (existing?.type === 'api') {
           hydrateApiForm(existing);
           setActiveDataSourcePanel('api');
         } else {
+          // 如果有数据来源但类型不是 api，则打开标签面板；如果没有数据来源，也打开标签面板
           setActiveDataSourcePanel('tag');
         }
       } else if (elementType === 'image') {
@@ -1995,6 +2159,9 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
         });
         if (imagePos >= 0) {
           const existing = getDataSourceForImage(imagePos);
+          // 关闭右键菜单（如果有）
+          setContextMenu(null);
+          // 直接打开对应的修改面板，不显示选择菜单
           setDataSourceMenu({
             x: event.clientX,
             y: event.clientY,
@@ -2002,10 +2169,12 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
             imagePos,
             existingSource: existing,
           });
+          // 根据现有数据来源类型直接打开对应面板
           if (existing?.type === 'api') {
             hydrateApiForm(existing);
             setActiveDataSourcePanel('api');
           } else {
+            // 如果有数据来源但类型不是 api，则打开标签面板；如果没有数据来源，也打开标签面板
             setActiveDataSourcePanel('tag');
           }
         }
@@ -2027,15 +2196,26 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
   useEffect(() => {
     const handleClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
+      // 如果点击的是数据来源弹窗内部，不关闭
       if (target?.closest('.data-source-popover')) {
         return;
       }
+      // 如果点击的是右键菜单内部，不关闭（菜单容器已经有 stopPropagation，但为了保险起见还是检查）
+      const contextMenuEl = target?.closest('.fixed.bg-white.border.rounded-lg.shadow-lg.py-1');
+      if (contextMenuEl) {
+        return;
+      }
+      // 点击外部，关闭所有菜单
       setContextMenu(null);
       setDataSourceMenu(null);
       setActiveDataSourcePanel(null);
     };
-    document.addEventListener('click', handleClick);
+    // 延迟绑定，确保 React 事件处理器先注册
+    const timeoutId = setTimeout(() => {
+      document.addEventListener('click', handleClick);
+    }, 0);
     return () => {
+      clearTimeout(timeoutId);
       document.removeEventListener('click', handleClick);
     };
   }, []);
@@ -2253,8 +2433,11 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
                     数据来源
                   </div>
                   <button
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
                       const existing = getDataSourceForImage(contextMenu.imagePos!);
+                      // 从右键菜单触发时，不设置 activeDataSourcePanel，显示选择菜单
                       setDataSourceMenu({
                         x: contextMenu.x,
                         y: contextMenu.y,
@@ -2262,18 +2445,24 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
                         imagePos: contextMenu.imagePos!,
                         existingSource: existing,
                       });
-                      setActiveDataSourcePanel('tag');
-                      setContextMenu(null);
+                      setActiveDataSourcePanel(null); // 不直接打开面板，显示选择菜单
+                      // 延迟关闭右键菜单，确保数据来源菜单先渲染
+                      setTimeout(() => {
+                        setContextMenu(null);
+                      }, 50);
                     }}
                     className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center space-x-2"
                   >
                     <TagIcon className="w-4 h-4" />
-                    <span>绑定标签值</span>
+                    <span>标签值</span>
                   </button>
                   <button
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
                       const existing = getDataSourceForImage(contextMenu.imagePos!);
                       hydrateApiForm(existing);
+                      // 从右键菜单触发时，直接打开对应的面板
                       setDataSourceMenu({
                         x: contextMenu.x,
                         y: contextMenu.y,
@@ -2282,12 +2471,15 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
                         existingSource: existing,
                       });
                       setActiveDataSourcePanel('api');
-                      setContextMenu(null);
+                      // 延迟关闭右键菜单，确保数据来源菜单先渲染
+                      setTimeout(() => {
+                        setContextMenu(null);
+                      }, 50);
                     }}
                     className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center space-x-2 border-b"
                   >
                     <Database className="w-4 h-4" />
-                    <span>绑定接口数据</span>
+                    <span>接口数据</span>
                   </button>
                 </>
               )}
@@ -2422,10 +2614,11 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
           )}
         </div>
       )}
-      {dataSourceMenu && (
+      {/* 选择菜单：只在没有 activeDataSourcePanel 时显示（例如从右键菜单触发时） */}
+      {dataSourceMenu && !activeDataSourcePanel && (
         <div
           className="fixed bg-white border rounded-lg shadow-lg py-1 z-50 min-w-[200px] data-source-popover"
-          style={getPopoverPosition(dataSourceMenu.x, dataSourceMenu.y, 220, 160)}
+          style={getPopoverPosition(dataSourceMenu.x, dataSourceMenu.y, 220, 160, 10, 10)}
           onClick={(e) => e.stopPropagation()}
         >
           <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 border-b">
@@ -2470,7 +2663,7 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
       {dataSourceMenu && activeDataSourcePanel === 'tag' && (
         <div
           className="fixed bg-white border rounded-lg shadow-2xl w-[360px] p-4 z-50 data-source-popover"
-          style={getPopoverPosition(dataSourceMenu.x + 200, dataSourceMenu.y, 360, 420)}
+          style={getPopoverPosition(dataSourceMenu.x, dataSourceMenu.y, 360, 420, 10, 10)}
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex items-center justify-between mb-3">
@@ -2552,7 +2745,7 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
       {dataSourceMenu && activeDataSourcePanel === 'api' && (
         <div
           className="fixed bg-white border rounded-lg shadow-2xl w-[420px] p-4 z-50 data-source-popover"
-          style={getPopoverPosition(dataSourceMenu.x + 220, dataSourceMenu.y, 420, 500)}
+          style={getPopoverPosition(dataSourceMenu.x, dataSourceMenu.y, 420, 500, 10, 10)}
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex items-center justify-between mb-3">
