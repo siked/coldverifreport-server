@@ -492,6 +492,7 @@ import {
   FlaskConical,
   FileText,
   Copy,
+  FileDown,
 } from 'lucide-react';
 import Modal from './Modal';
 import type { TemplateTag } from './TemplateTagList';
@@ -501,6 +502,8 @@ interface TiptapEditorProps {
   onSave: (markdown: string) => Promise<void>;
   tags: TemplateTag[];
   onChangeTags: (tags: TemplateTag[]) => void;
+  templateId?: string;
+  templateName?: string;
 }
 
 const createTurndown = () => {
@@ -710,13 +713,15 @@ const createTurndown = () => {
   return turndown;
 };
 
-export default function TiptapEditor({ content, onSave, tags, onChangeTags }: TiptapEditorProps) {
+export default function TiptapEditor({ content, onSave, tags, onChangeTags, templateId, templateName }: TiptapEditorProps) {
   const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
   const [initialMarkdown, setInitialMarkdown] = useState(content || '');
   const [currentMarkdown, setCurrentMarkdown] = useState(content || '');
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
   const turndown = useMemo(() => createTurndown(), []);
   useEffect(() => {
     const styleId = 'tiptap-data-source-style';
@@ -969,6 +974,158 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
       setIsSaving(false);
     }
   }, [currentMarkdown, editor, hasChanges, onSave]);
+
+  const handleExportDocx = useCallback(async () => {
+    if (!templateId) {
+      alert('无法导出：缺少模板 ID');
+      return;
+    }
+    
+    setIsExporting(true);
+    setExportProgress(0);
+    let progressInterval: NodeJS.Timeout | null = null;
+    
+    try {
+      // 先保存当前内容（如果有更改）
+      if (hasChanges && editor) {
+        await handleSave();
+      }
+      
+      // 使用 XMLHttpRequest 来获取下载进度
+      const xhr = new XMLHttpRequest();
+      xhr.responseType = 'blob';
+      
+      // 根据内容大小估算处理时间
+      const contentLength = currentMarkdown.length;
+      const contentSizeKB = contentLength / 1024;
+      let intervalTime = 200;
+      let increment = 2;
+      
+      // 内容越大，处理时间越长
+      if (contentSizeKB < 50) {
+        intervalTime = 150;
+        increment = 3;
+      } else if (contentSizeKB > 200) {
+        intervalTime = 300;
+        increment = 1.5;
+      }
+      
+      // 模拟服务器处理进度（从 10% 缓慢增长到 90%）
+      const PROCESSING_PHASE_MIN = 10;
+      let simulatedProgress = PROCESSING_PHASE_MIN;
+      progressInterval = setInterval(() => {
+        if (simulatedProgress < 90) {
+          simulatedProgress += increment;
+          setExportProgress(Math.min(simulatedProgress, 90));
+        }
+      }, intervalTime);
+      
+      const promise = new Promise<{ blob: Blob; filename: string }>((resolve, reject) => {
+        xhr.addEventListener('loadstart', () => {
+          setExportProgress(PROCESSING_PHASE_MIN);
+        });
+        
+        xhr.addEventListener('progress', (e) => {
+          if (e.lengthComputable && e.total > 0) {
+            // 下载阶段占 90-100% 的进度
+            const downloadPercent = Math.round((e.loaded / e.total) * 10);
+            setExportProgress(Math.min(90 + downloadPercent, 100));
+          }
+        });
+        
+        xhr.addEventListener('load', () => {
+          // 清除模拟进度
+          if (progressInterval) {
+            clearInterval(progressInterval);
+            progressInterval = null;
+          }
+          
+          if (xhr.status >= 200 && xhr.status < 300) {
+            setExportProgress(100);
+            
+            // 获取文件名
+            const contentDisposition = xhr.getResponseHeader('Content-Disposition');
+            let filename = templateName || 'document';
+            if (contentDisposition) {
+              const filenameMatch = contentDisposition.match(/filename="?([^"]+)"?/);
+              if (filenameMatch) {
+                filename = decodeURIComponent(filenameMatch[1]);
+              }
+            }
+            if (!filename.endsWith('.docx')) {
+              filename += '.docx';
+            }
+            
+            resolve({ blob: xhr.response, filename });
+          } else {
+            try {
+              const reader = new FileReader();
+              reader.onload = () => {
+                try {
+                  const data = JSON.parse(reader.result as string);
+                  reject(new Error(data.error || '导出失败'));
+                } catch {
+                  reject(new Error(`导出失败: ${xhr.statusText}`));
+                }
+              };
+              reader.readAsText(xhr.response);
+            } catch {
+              reject(new Error(`导出失败: ${xhr.statusText}`));
+            }
+          }
+        });
+        
+        xhr.addEventListener('error', () => {
+          if (progressInterval) {
+            clearInterval(progressInterval);
+            progressInterval = null;
+          }
+          reject(new Error('网络错误'));
+        });
+        
+        xhr.addEventListener('abort', () => {
+          if (progressInterval) {
+            clearInterval(progressInterval);
+            progressInterval = null;
+          }
+          reject(new Error('导出已取消'));
+        });
+      });
+      
+      xhr.open('POST', '/api/templates/export-docx');
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.send(JSON.stringify({
+        templateId,
+        content: currentMarkdown,
+      }));
+      
+      const { blob, filename } = await promise;
+      
+      // 下载文件
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err: any) {
+      if (progressInterval) {
+        clearInterval(progressInterval);
+        progressInterval = null;
+      }
+      console.error('导出 DOCX 失败:', err);
+      alert(err.message || '导出失败，请重试');
+    } finally {
+      if (progressInterval) {
+        clearInterval(progressInterval);
+        progressInterval = null;
+      }
+      setIsExporting(false);
+      setTimeout(() => setExportProgress(0), 500);
+    }
+  }, [templateId, templateName, currentMarkdown, hasChanges, editor, handleSave]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1918,6 +2075,17 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
 
         {/* 操作 */}
         <div className="flex items-center space-x-1 border-l pl-2">
+          {templateId && (
+            <button
+              type="button"
+              onClick={handleExportDocx}
+              disabled={isExporting}
+              className={`${buttonCommon} ${isExporting ? 'opacity-50 cursor-not-allowed' : ''}`}
+              title="导出为 Word 文档"
+            >
+              <FileDown className="w-4 h-4" />
+            </button>
+          )}
           <button
             type="button"
             onClick={() => {
@@ -2585,6 +2753,30 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
             </span>
           </div>
           <p className="text-xs text-gray-500 mt-1">正在上传图片...</p>
+        </div>
+      )}
+      {isExporting && (
+        <div className="bg-white border-b px-4 py-2">
+          <div className="flex items-center space-x-3">
+            <div className="flex-1 bg-gray-200 rounded-full h-2 overflow-hidden">
+              <div
+                className="bg-primary-600 h-full transition-all duration-300 ease-out"
+                style={{ width: `${exportProgress}%` }}
+              />
+            </div>
+            <span className="text-sm text-gray-600 min-w-[3rem] text-right">
+              {exportProgress}%
+            </span>
+          </div>
+          <p className="text-xs text-gray-500 mt-1">
+            {exportProgress < 10 
+              ? '正在准备导出...' 
+              : exportProgress < 90 
+              ? '正在生成 Word 文档...' 
+              : exportProgress < 100
+              ? '正在下载文件...'
+              : '导出完成'}
+          </p>
         </div>
       )}
       {contextMenu && (

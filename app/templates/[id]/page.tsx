@@ -137,6 +137,8 @@ export default function TemplateEditorPage({ params }: { params: Promise<{ id: s
         onSave={handleSaveTemplate}
         tags={template.tags || []}
         onChangeTags={handleTagsChange}
+        templateId={template._id}
+        templateName={template.name}
       />
     );
   };
