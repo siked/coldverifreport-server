@@ -373,6 +373,40 @@ const DATA_SOURCE_STYLES = `
   outline-offset: 2px;
   border-radius: 4px;
 }
+.page-header-footer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  font-size: 12px;
+  color: #6b7280;
+  z-index: 10;
+}
+.page-header {
+  top: 0;
+  border-bottom: 1px solid #e5e7eb;
+  padding: 10px 40px;
+  background: #fff;
+}
+.page-footer {
+  bottom: 0;
+  border-top: 1px solid #e5e7eb;
+  padding: 10px 40px;
+  background: #fff;
+}
+@media print {
+  @page {
+    margin: 0;
+    size: A4;
+  }
+  .page-header {
+    position: fixed;
+    top: 0;
+  }
+  .page-footer {
+    position: fixed;
+    bottom: 0;
+  }
+}
 `;
 
 const stringifyDataSource = (payload: DataSourcePayload) =>
@@ -733,6 +767,12 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
   
   type PageFormatType = keyof typeof PAGE_FORMATS;
   const [pageFormat, setPageFormat] = useState<PageFormatType>('A4');
+  
+  // 页眉、页脚、页码状态
+  const [headerContent, setHeaderContent] = useState('');
+  const [footerContent, setFooterContent] = useState('');
+  const [pageNumberFormat, setPageNumberFormat] = useState('{page}/{total}');
+  const [showPageNumber, setShowPageNumber] = useState(true);
 
   const htmlContent = useMemo(() => {
     try {
@@ -1579,6 +1619,26 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
     setPageFormat(format);
   }, []);
 
+  // 计算总页数（通过分页符数量+1）
+  const getTotalPages = useCallback(() => {
+    if (!editor) return 1;
+    let pageCount = 1;
+    editor.state.doc.descendants((node) => {
+      if (node.type.name === 'pageBreak') {
+        pageCount++;
+      }
+      return true;
+    });
+    return pageCount;
+  }, [editor]);
+
+  // 格式化页码文本
+  const formatPageNumber = useCallback((page: number, total: number) => {
+    return pageNumberFormat
+      .replace(/{page}/g, String(page))
+      .replace(/{total}/g, String(total));
+  }, [pageNumberFormat]);
+
   // 页面格式样式计算
   const getPageFormatStyle = useMemo(() => {
     // 转换为像素（96 DPI）：1mm ≈ 3.7795px
@@ -1592,11 +1652,14 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
       backgroundColor: '#fff',
       boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
       padding: '40px',
+      paddingTop: headerContent ? '80px' : '40px', // 如果有页眉，增加顶部内边距
+      paddingBottom: footerContent || showPageNumber ? '80px' : '40px', // 如果有页脚或页码，增加底部内边距
       minHeight: `${heightPx}px`, // 使用页面高度
-      pageBreakAfter: 'always', // 打印时分页
-      breakAfter: 'page',
+      pageBreakAfter: 'always' as const, // 打印时分页
+      breakAfter: 'page' as const,
+      position: 'relative' as const,
     };
-  }, [pageFormat]);
+  }, [pageFormat, headerContent, footerContent, showPageNumber]);
 
   const buttonCommon =
     'p-2 rounded hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors';
@@ -1738,21 +1801,105 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
           </button>
         </div>
 
-        {/* 页面格式 */}
-        <div className="flex items-center space-x-1 border-r pr-2">
-          <FileText className="w-4 h-4 text-gray-600 mr-1" />
-          <select
-            value={pageFormat}
-            onChange={(e) => setPageFormat(e.target.value as PageFormatType)}
-            className="px-2 py-1 text-sm border rounded focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white text-gray-700"
-            title="页面尺寸"
+        {/* 页面设置（页面格式、页眉页脚页码） */}
+        <div className="flex items-center space-x-1 border-r pr-2 relative group">
+          <button
+            type="button"
+            className={`${buttonCommon} flex items-center space-x-1`}
+            title="页面设置"
+            onClick={(e) => {
+              e.stopPropagation();
+              // 点击时显示下拉菜单
+              const menu = document.getElementById('header-footer-menu');
+              if (menu) {
+                const isHidden = menu.classList.contains('hidden');
+                // 先隐藏所有其他菜单
+                document.querySelectorAll('#header-footer-menu').forEach((m) => {
+                  m.classList.add('hidden');
+                });
+                // 切换当前菜单
+                if (isHidden) {
+                  menu.classList.remove('hidden');
+                } else {
+                  menu.classList.add('hidden');
+                }
+              }
+            }}
           >
-            {(Object.keys(PAGE_FORMATS) as PageFormatType[]).map((format) => (
-              <option key={format} value={format}>
-                {PAGE_FORMATS[format].name}
-              </option>
-            ))}
-          </select>
+            <FileText className="w-4 h-4" />
+            <span className="text-sm">页面设置</span>
+          </button>
+          <div
+            id="header-footer-menu"
+            className="hidden absolute top-full left-0 mt-1 bg-white border rounded-lg shadow-lg p-4 z-50 min-w-[320px]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="space-y-3">
+              {/* 页面格式 */}
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">页面尺寸</label>
+                <select
+                  value={pageFormat}
+                  onChange={(e) => setPageFormat(e.target.value as PageFormatType)}
+                  className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white text-gray-700"
+                >
+                  {(Object.keys(PAGE_FORMATS) as PageFormatType[]).map((format) => (
+                    <option key={format} value={format}>
+                      {PAGE_FORMATS[format].name} ({PAGE_FORMATS[format].width} × {PAGE_FORMATS[format].height} mm)
+                    </option>
+                  ))}
+                </select>
+              </div>
+              
+              <div className="border-t pt-3">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">页眉内容</label>
+                  <input
+                    type="text"
+                    value={headerContent}
+                    onChange={(e) => setHeaderContent(e.target.value)}
+                    placeholder="输入页眉内容..."
+                    className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                </div>
+              </div>
+              
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">页脚内容</label>
+                <input
+                  type="text"
+                  value={footerContent}
+                  onChange={(e) => setFooterContent(e.target.value)}
+                  placeholder="输入页脚内容..."
+                  className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
+              
+              <div>
+                <label className="flex items-center space-x-2 text-xs text-gray-700 mb-1">
+                  <input
+                    type="checkbox"
+                    checked={showPageNumber}
+                    onChange={(e) => setShowPageNumber(e.target.checked)}
+                    className="rounded"
+                  />
+                  <span>显示页码</span>
+                </label>
+                {showPageNumber && (
+                  <input
+                    type="text"
+                    value={pageNumberFormat}
+                    onChange={(e) => setPageNumberFormat(e.target.value)}
+                    placeholder="{page}/{total}"
+                    className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 mt-1"
+                  />
+                )}
+                <p className="text-xs text-gray-400 mt-1">
+                  使用 {'{page}'} 表示当前页码，{'{total}'} 表示总页数
+                </p>
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* 分页符 */}
@@ -2289,6 +2436,19 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
     if (!editor) return;
     refreshApiDataSources();
   }, [editor, refreshApiDataSources]);
+
+  // 点击外部关闭页眉页脚菜单
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const menu = document.getElementById('header-footer-menu');
+      const button = event.target as HTMLElement;
+      if (menu && !menu.contains(button) && !button.closest('[title="页面设置"]')) {
+        menu.classList.add('hidden');
+      }
+    };
+    document.addEventListener('click', handleClickOutside);
+    return () => document.removeEventListener('click', handleClickOutside);
+  }, []);
 
   // 点击其他地方关闭右键菜单
   useEffect(() => {
@@ -3088,8 +3248,28 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
         </div>
       )}
       <div className="flex-1 overflow-auto bg-gray-100 p-4">
-        <div style={getPageFormatStyle} className="mx-auto">
+        <div style={getPageFormatStyle} className="mx-auto relative">
+          {/* 页眉 */}
+          {headerContent && (
+            <div className="page-header-footer page-header">
+              {headerContent}
+            </div>
+          )}
+          
+          {/* 编辑器内容 */}
           <EditorContent editor={editor} className="h-full" />
+          
+          {/* 页脚和页码 */}
+          {(footerContent || showPageNumber) && (
+            <div className="page-header-footer page-footer flex items-center justify-between">
+              <div>{footerContent}</div>
+              {showPageNumber && (
+                <div>
+                  {formatPageNumber(1, getTotalPages())}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>
