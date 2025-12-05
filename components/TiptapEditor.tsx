@@ -298,14 +298,6 @@ interface ApiFormState {
   dataPath: string;
 }
 
-type HeadingItem = {
-  id: string;
-  level: 1 | 2 | 3;
-  text: string;
-  pos: number;
-  endPos: number;
-};
-
 const DataSourceMark = Mark.create({
   name: 'dataSource',
   inclusive: true,
@@ -525,14 +517,12 @@ import {
   Rows,
   Trash2,
   Plus,
-  GripVertical,
   Search,
   ChevronDown,
   ChevronUp,
   Tag as TagIcon,
   Database,
   Plug,
-  PlusCircle,
   FlaskConical,
   FileText,
   Copy,
@@ -540,6 +530,9 @@ import {
 } from 'lucide-react';
 import Modal from './Modal';
 import type { TemplateTag } from './TemplateTagList';
+import OutlineSidebar from './tiptap/OutlineSidebar';
+import TagSelectorPanel from './tiptap/TagSelectorPanel';
+import type { HeadingItem } from './tiptap/types';
 
 interface TiptapEditorProps {
   content: string;
@@ -3284,86 +3277,20 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
         </div>
       )}
       {dataSourceMenu && activeDataSourcePanel === 'tag' && (
-        <div
-          className="fixed bg-white border rounded-lg shadow-2xl w-[360px] p-4 z-50 data-source-popover"
-          style={getPopoverPosition(dataSourceMenu.x, dataSourceMenu.y, 360, 420, 10, 10)}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <p className="text-sm font-semibold text-gray-800">选择标签值</p>
-              <p className="text-xs text-gray-500">
-                当前目标：{dataSourceMenu.targetType === 'image' ? '图片' : '文本'}
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                setActiveDataSourcePanel(null);
-                setDataSourceMenu(null);
-              }}
-              className="p-1 rounded hover:bg-gray-100"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-          <div className="mb-3">
-            <input
-              type="text"
-              value={tagSearch}
-              onChange={(e) => setTagSearch(e.target.value)}
-              placeholder="搜索标签名称..."
-              className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-            />
-          </div>
-          <div className="max-h-64 overflow-y-auto border rounded divide-y">
-            {filteredTags.length === 0 ? (
-              <div className="py-6 text-center text-sm text-gray-500">
-                暂无可用标签
-              </div>
-            ) : (
-              filteredTags.map((tag) => (
-                <button
-                  key={tag._id}
-                  className="w-full text-left px-3 py-2 hover:bg-primary-50 space-y-1"
-                  onClick={() => handleApplyTag(tag)}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium text-gray-800">{tag.name}</span>
-                    <span className="text-xs text-gray-500 uppercase">{tag.type}</span>
-                  </div>
-                  <div className="text-xs text-gray-500 truncate">
-                    {tag.description || '无描述'}
-                  </div>
-                  <div className="text-sm text-gray-700 truncate">
-                    {tag.type === 'image' || tag.type === 'cda-image'
-                      ? tag.value
-                      : formatTagValue(tag)}
-                  </div>
-                </button>
-              ))
-            )}
-          </div>
-          <div className="flex items-center justify-between mt-3">
-            <button
-              type="button"
-              onClick={openQuickTagModal}
-              className="inline-flex items-center space-x-2 px-3 py-2 border rounded text-sm text-gray-700 hover:bg-gray-50"
-            >
-              <PlusCircle className="w-4 h-4" />
-              <span>快速添加标签</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setActiveDataSourcePanel(null);
-                setDataSourceMenu(null);
-              }}
-              className="text-sm text-gray-500 hover:text-gray-700"
-            >
-              关闭
-            </button>
-          </div>
-        </div>
+        <TagSelectorPanel
+          position={getPopoverPosition(dataSourceMenu.x, dataSourceMenu.y, 360, 420, 10, 10)}
+          targetType={dataSourceMenu.targetType}
+          filteredTags={filteredTags}
+          tagSearch={tagSearch}
+          onTagSearchChange={setTagSearch}
+          onApplyTag={handleApplyTag}
+          onOpenQuickAdd={openQuickTagModal}
+          onClose={() => {
+            setActiveDataSourcePanel(null);
+            setDataSourceMenu(null);
+          }}
+          formatTagValue={formatTagValue}
+        />
       )}
       {dataSourceMenu && activeDataSourcePanel === 'api' && (
         <div
@@ -3613,94 +3540,22 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
         </div>
       )}
       <div className="flex-1 flex overflow-hidden bg-gray-100">
-        <aside
-          ref={sidebarRef}
-          className="relative border-r bg-white overflow-auto select-none"
-          style={{ width: `${sidebarWidth}px`, minWidth: '180px', maxWidth: '480px' }}
-        >
-          <div className="p-3 border-b flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-gray-800">目录</p>
-              <p className="text-xs text-gray-500">自动读取 H1 / H2 / H3</p>
-            </div>
-            <button
-              type="button"
-              onClick={buildHeadings}
-              className="p-1 rounded hover:bg-gray-100 text-gray-500"
-              title="刷新目录"
-            >
-              <RefreshCw className="w-4 h-4" />
-            </button>
-          </div>
-          <div className="p-2">
-            {headings.length === 0 ? (
-              <div className="text-xs text-gray-500 px-2 py-4 text-center">暂无标题</div>
-            ) : (
-              <ul className="space-y-1">
-                {headings.map((item) => {
-                  const isDragOver = dragOverHeadingId === item.id;
-                  const indent = (item.level - 1) * 12;
-                  return (
-                    <li
-                      key={item.id}
-                      draggable
-                      onDragStart={() => handleHeadingDragStart(item.id)}
-                      onDragEnd={handleHeadingDragEnd}
-                      onDragOver={(e) => handleHeadingDragOver(e, item)}
-                      onDrop={(e) => {
-                        e.preventDefault();
-                        handleHeadingDrop(item.id);
-                      }}
-                      className={`group relative rounded transition-colors border-l-2 ${
-                        isDragOver ? 'border-primary-500 bg-primary-50' : 'border-transparent hover:bg-gray-50'
-                      }`}
-                    >
-                      {isDragOver && (
-                        <div className="pointer-events-none absolute left-3 right-2 -top-1 h-0.5 bg-primary-500 shadow-md animate-pulse rounded-full" />
-                      )}
-                      <div
-                        className="flex items-center px-2 py-2 space-x-2 cursor-pointer"
-                        onClick={() => handleNavigateHeading(item)}
-                      >
-                        <GripVertical className="w-4 h-4 text-gray-400 group-hover:text-gray-600" />
-                        <span
-                          className="text-[11px] text-gray-500 uppercase tracking-wide"
-                          style={{ minWidth: '28px' }}
-                        >
-                          H{item.level}
-                        </span>
-                        <span
-                          className="text-sm text-gray-700 truncate flex-1"
-                          style={{ paddingLeft: `${indent}px` }}
-                        >
-                          {item.text}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteHeadingSection(item.id);
-                          }}
-                          className="p-1 rounded text-gray-400 hover:text-red-600 hover:bg-red-50"
-                          title="删除该标题及其内容"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-          <div
-            className={`absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-primary-200 ${
-              resizingSidebar ? 'bg-primary-300' : ''
-            }`}
-            onMouseDown={startResizeSidebar}
-            title="拖动调整目录宽度"
-          />
-        </aside>
+        <OutlineSidebar
+          headings={headings}
+          width={sidebarWidth}
+          sidebarRef={sidebarRef}
+          draggingHeadingId={draggingHeadingId}
+          dragOverHeadingId={dragOverHeadingId}
+          resizing={resizingSidebar}
+          onRefresh={buildHeadings}
+          onNavigate={handleNavigateHeading}
+          onDelete={handleDeleteHeadingSection}
+          onDragStart={handleHeadingDragStart}
+          onDragOver={handleHeadingDragOver}
+          onDrop={handleHeadingDrop}
+          onDragEnd={handleHeadingDragEnd}
+          onStartResize={startResizeSidebar}
+        />
         <div className="flex-1 overflow-auto p-4">
           <div style={getPageFormatStyle} className="mx-auto relative">
             {/* 页眉 */}
