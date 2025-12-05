@@ -60,15 +60,21 @@ export async function getCategoryById(id: string, userId: string): Promise<Categ
 export async function updateCategory(
   id: string,
   name: string,
-  userId: string
+  userId: string,
+  templateId?: string
 ): Promise<boolean> {
   const client = await clientPromise;
   const db = client.db();
   const categories = db.collection<Category>('categories');
 
+  const updateData: any = { name, updatedAt: new Date() };
+  if (templateId !== undefined) {
+    updateData.templateId = templateId || undefined;
+  }
+
   const result = await categories.updateOne(
     { _id: toObjectId(id), userId },
-    { $set: { name, updatedAt: new Date() } }
+    { $set: updateData }
   );
 
   return result.modifiedCount > 0;

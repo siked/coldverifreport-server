@@ -28,8 +28,11 @@ export default function TemplateEditorPage({ params }: { params: Promise<{ id: s
     categoryId: string;
     taskTypeId: string;
   } | null>(null);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editingName, setEditingName] = useState('');
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const editorRef = useRef<TiptapEditorRef | null>(null);
+  const nameInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadTemplate = async (templateId: string) => {
     setLoading(true);
@@ -55,6 +58,12 @@ export default function TemplateEditorPage({ params }: { params: Promise<{ id: s
   useEffect(() => {
     loadTemplate(id);
   }, [id]);
+
+  useEffect(() => {
+    if (template) {
+      setEditingName(template.name);
+    }
+  }, [template?._id]);
 
   const handleSaveTemplate = async (content: string) => {
     if (!template) return;
@@ -107,6 +116,58 @@ export default function TemplateEditorPage({ params }: { params: Promise<{ id: s
     }
   };
 
+  const handleNameSave = async () => {
+    if (!template) return;
+    const trimmedName = editingName.trim();
+    if (!trimmedName) {
+      alert('模板名称不能为空');
+      setEditingName(template.name);
+      setIsEditingName(false);
+      return;
+    }
+    if (trimmedName === template.name) {
+      setIsEditingName(false);
+      return;
+    }
+    try {
+      const res = await fetch('/api/templates', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: template._id,
+          name: trimmedName,
+          content: template.content,
+          tags: template.tags || [],
+        }),
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || '保存名称失败');
+      }
+
+      setTemplate({ ...template, name: trimmedName, updatedAt: new Date().toISOString() });
+      setIsEditingName(false);
+    } catch (err: any) {
+      alert(err.message || '保存名称失败');
+      setEditingName(template.name);
+    }
+  };
+
+  const handleNameCancel = () => {
+    if (template) {
+      setEditingName(template.name);
+    }
+    setIsEditingName(false);
+  };
+
+  useEffect(() => {
+    if (isEditingName && nameInputRef.current) {
+      nameInputRef.current.focus();
+      nameInputRef.current.select();
+    }
+  }, [isEditingName]);
+
   const renderContent = () => {
     if (loading) {
       return (
@@ -157,11 +218,40 @@ export default function TemplateEditorPage({ params }: { params: Promise<{ id: s
     <Layout>
       <div className="h-[calc(100vh-4rem)] flex flex-col">
         <div className="bg-white border-b px-6 py-4 flex items-center justify-between">
-          <div>
+          <div className="flex-1">
             <p className="text-xs text-gray-500 mb-1">模板名称</p>
-            <h2 className="text-xl font-semibold text-gray-800">
-              {template?.name || '加载中...'}
-            </h2>
+            {isEditingName && template ? (
+              <input
+                ref={nameInputRef}
+                type="text"
+                value={editingName}
+                onChange={(e) => setEditingName(e.target.value)}
+                onBlur={handleNameSave}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleNameSave();
+                  } else if (e.key === 'Escape') {
+                    e.preventDefault();
+                    handleNameCancel();
+                  }
+                }}
+                className="text-xl font-semibold text-gray-800 bg-transparent border-b-2 border-primary-600 focus:outline-none focus:border-primary-700 w-full"
+              />
+            ) : (
+              <h2
+                className="text-xl font-semibold text-gray-800 cursor-pointer hover:text-primary-600 transition-colors"
+                onDoubleClick={() => {
+                  if (template) {
+                    setEditingName(template.name);
+                    setIsEditingName(true);
+                  }
+                }}
+                title="双击编辑"
+              >
+                {template?.name || '加载中...'}
+              </h2>
+            )}
             {template?.updatedAt && (
               <p className="text-xs text-gray-500 mt-1">
                 最近更新：{new Date(template.updatedAt).toLocaleString('zh-CN')}

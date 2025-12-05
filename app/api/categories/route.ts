@@ -6,6 +6,7 @@ import {
   updateCategory,
   deleteCategory,
   moveCategory,
+  getCategoryById,
 } from '@/lib/models/Category';
 
 export async function GET(request: NextRequest) {
@@ -74,7 +75,7 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: '未登录' }, { status: 401 });
     }
 
-    const { id, name, parentId, action } = await request.json();
+    const { id, name, parentId, action, templateId } = await request.json();
 
     // 如果是移动操作
     if (action === 'move' && id !== undefined) {
@@ -85,12 +86,20 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ success: true });
     }
 
-    // 如果是更新名称操作
+    // 如果是更新操作
     if (!id || !name) {
       return NextResponse.json({ error: 'ID和名称不能为空' }, { status: 400 });
     }
 
-    const success = await updateCategory(id, name, user.userId);
+    // 如果提供了 templateId，需要验证分类是否为任务类型
+    if (templateId !== undefined) {
+      const category = await getCategoryById(id, user.userId);
+      if (category && category.isTaskType && !templateId) {
+        return NextResponse.json({ error: '任务类型必须选择模版' }, { status: 400 });
+      }
+    }
+
+    const success = await updateCategory(id, name, user.userId, templateId);
     if (!success) {
       return NextResponse.json({ error: '更新失败' }, { status: 400 });
     }

@@ -43,6 +43,8 @@ export default function CategoryTree({ type, onCategorySelect, onCategoryDoubleC
   const [newTaskTypeName, setNewTaskTypeName] = useState('');
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
   const [selectedTemplateCategoryId, setSelectedTemplateCategoryId] = useState<string>('');
+  const [editingTemplateId, setEditingTemplateId] = useState<string>('');
+  const [editingTemplateCategoryId, setEditingTemplateCategoryId] = useState<string>('');
   const [parentId, setParentId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [alert, setAlert] = useState<{ isOpen: boolean; message: string; type?: 'success' | 'error' | 'info' | 'warning' }>({
@@ -67,6 +69,9 @@ export default function CategoryTree({ type, onCategorySelect, onCategoryDoubleC
 
   const filteredTemplates = selectedTemplateCategoryId
     ? templates.filter((template) => template.categoryId === selectedTemplateCategoryId)
+    : [];
+  const filteredEditingTemplates = editingTemplateCategoryId
+    ? templates.filter((template) => template.categoryId === editingTemplateCategoryId)
     : [];
   useEffect(() => {
     fetchCategories();
@@ -254,17 +259,32 @@ export default function CategoryTree({ type, onCategorySelect, onCategoryDoubleC
 
     if (!editingId) return;
 
+    const editingCategory = categories.find((c) => c._id === editingId);
+    // 如果是任务类型，必须选择模版
+    if (editingCategory?.isTaskType && !editingTemplateId) {
+      setAlert({ isOpen: true, message: '任务类型必须选择模版', type: 'warning' });
+      return;
+    }
+
     setLoading(true);
     try {
+      const body: any = { id: editingId, name: editingName };
+      // 如果是任务类型，添加 templateId
+      if (editingCategory?.isTaskType) {
+        body.templateId = editingTemplateId;
+      }
+
       const res = await fetch('/api/categories', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: editingId, name: editingName }),
+        body: JSON.stringify(body),
       });
 
       if (res.ok) {
         setEditingId(null);
         setEditingName('');
+        setEditingTemplateId('');
+        setEditingTemplateCategoryId('');
         setShowEditModal(false);
         await fetchCategories();
       } else {
@@ -762,8 +782,24 @@ export default function CategoryTree({ type, onCategorySelect, onCategoryDoubleC
                 </button>
                   <button
                   onClick={() => {
+                    const node = contextMenu.node;
                     setEditingId(contextMenu.nodeId);
-                    setEditingName(contextMenu.node.name);
+                    setEditingName(node.name);
+                    // 如果是任务类型，设置模版相关的状态
+                    if (node.isTaskType && node.templateId) {
+                      // 找到当前模版所属的分类
+                      const currentTemplate = templates.find((t) => t._id === node.templateId);
+                      if (currentTemplate) {
+                        setEditingTemplateCategoryId(currentTemplate.categoryId);
+                        setEditingTemplateId(node.templateId);
+                      } else {
+                        setEditingTemplateCategoryId('');
+                        setEditingTemplateId('');
+                      }
+                    } else {
+                      setEditingTemplateCategoryId('');
+                      setEditingTemplateId('');
+                    }
                     setShowEditModal(true);
                     setContextMenu(null);
                   }}
@@ -1016,6 +1052,8 @@ export default function CategoryTree({ type, onCategorySelect, onCategoryDoubleC
           setShowEditModal(false);
           setEditingId(null);
           setEditingName('');
+          setEditingTemplateId('');
+          setEditingTemplateCategoryId('');
         }}
         title="编辑分类"
         size="sm"
@@ -1035,6 +1073,59 @@ export default function CategoryTree({ type, onCategorySelect, onCategoryDoubleC
               required
             />
           </div>
+          {editingId && categories.find((c) => c._id === editingId)?.isTaskType && type === 'task' && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  模版分类
+                </label>
+                <select
+                  value={editingTemplateCategoryId}
+                  onChange={(e) => {
+                    setEditingTemplateCategoryId(e.target.value);
+                    setEditingTemplateId('');
+                  }}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500"
+                  required
+                  disabled={templateCategories.length === 0}
+                >
+                  <option value="">请选择模版分类</option>
+                  {renderTemplateCategoryOptions(templateCategoryTree)}
+                </select>
+                {templateCategories.length === 0 && (
+                  <p className="text-xs text-red-500 mt-1">暂无模版分类，请先在模板管理中创建</p>
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  选择模版
+                </label>
+                <select
+                  value={editingTemplateId}
+                  onChange={(e) => setEditingTemplateId(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500"
+                  required
+                  disabled={!editingTemplateCategoryId || filteredEditingTemplates.length === 0}
+                >
+                  <option value="">
+                    {!editingTemplateCategoryId
+                      ? '请先选择模版分类'
+                      : filteredEditingTemplates.length === 0
+                      ? '该分类下暂无模版'
+                      : '请选择模版'}
+                  </option>
+                  {filteredEditingTemplates.map((template) => (
+                    <option key={template._id} value={template._id}>
+                      {template.name}
+                    </option>
+                  ))}
+                </select>
+                {!editingTemplateCategoryId && (
+                  <p className="text-xs text-gray-500 mt-1">请选择模版分类后再选择模版</p>
+                )}
+              </div>
+            </>
+          )}
           <div className="flex space-x-2 justify-end">
             <button
               type="button"
@@ -1042,6 +1133,8 @@ export default function CategoryTree({ type, onCategorySelect, onCategoryDoubleC
                 setShowEditModal(false);
                 setEditingId(null);
                 setEditingName('');
+                setEditingTemplateId('');
+                setEditingTemplateCategoryId('');
               }}
               className="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300"
             >
