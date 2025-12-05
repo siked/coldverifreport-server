@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, forwardRef, useImperativeHandle } from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
@@ -595,6 +595,7 @@ import {
   FileText,
   Copy,
   FileDown,
+  ClipboardList,
 } from 'lucide-react';
 import Modal from './Modal';
 import type { TemplateTag } from './TemplateTagList';
@@ -603,6 +604,7 @@ import DataSourceMenu from './tiptap/DataSourceMenu';
 import OutlineSidebar from './tiptap/OutlineSidebar';
 import TagSelectorPanel, { TagFormattingOption } from './tiptap/TagSelectorPanel';
 import CalculationPanel, { CalculationDataSource } from './tiptap/CalculationPanel';
+import TaskSelectorModal from './tiptap/TaskSelectorModal';
 import type { ApiFormState, ApiTestResult, HeadingItem } from './tiptap/types';
 
 interface TiptapEditorProps {
@@ -612,6 +614,24 @@ interface TiptapEditorProps {
   onChangeTags: (tags: TemplateTag[]) => void;
   templateId?: string;
   templateName?: string;
+  onTaskChange?: (task: {
+    _id: string;
+    taskNumber: string;
+    taskName: string;
+    categoryId: string;
+    taskTypeId: string;
+  } | null) => void;
+}
+
+export interface TiptapEditorRef {
+  openTaskSelector: () => void;
+  selectedTask: {
+    _id: string;
+    taskNumber: string;
+    taskName: string;
+    categoryId: string;
+    taskTypeId: string;
+  } | null;
 }
 
 const createTurndown = () => {
@@ -821,7 +841,7 @@ const createTurndown = () => {
   return turndown;
 };
 
-export default function TiptapEditor({ content, onSave, tags, onChangeTags, templateId, templateName }: TiptapEditorProps) {
+const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, onSave, tags, onChangeTags, templateId, templateName, onTaskChange }, ref) => {
   const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -892,6 +912,16 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
   const [footerContent, setFooterContent] = useState('');
   const [pageNumberFormat, setPageNumberFormat] = useState('{page}/{total}');
   const [showPageNumber, setShowPageNumber] = useState(true);
+  
+  // 关联任务状态
+  const [selectedTask, setSelectedTask] = useState<{
+    _id: string;
+    taskNumber: string;
+    taskName: string;
+    categoryId: string;
+    taskTypeId: string;
+  } | null>(null);
+  const [showTaskSelector, setShowTaskSelector] = useState(false);
 
   const htmlContent = useMemo(() => {
     try {
@@ -3232,6 +3262,32 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
     };
   }, [editor, selectedImage, updateImageSize]);
 
+  // 处理任务选择
+  const handleTaskSelect = (task: {
+    _id: string;
+    taskNumber: string;
+    taskName: string;
+    categoryId: string;
+    taskTypeId: string;
+  }) => {
+    setSelectedTask(task);
+    setShowTaskSelector(false);
+    onTaskChange?.(task);
+  };
+
+  // 当任务状态变化时通知父组件
+  useEffect(() => {
+    onTaskChange?.(selectedTask);
+  }, [selectedTask, onTaskChange]);
+
+  // 暴露给父组件的方法
+  useImperativeHandle(ref, () => ({
+    openTaskSelector: () => {
+      setShowTaskSelector(true);
+    },
+    selectedTask,
+  }));
+
   return (
     <div className="h-full flex flex-col bg-white">
       {renderToolbar()}
@@ -3637,6 +3693,12 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
           onSave={handleQuickTagSave}
         />
       )}
+      <TaskSelectorModal
+        isOpen={showTaskSelector}
+        onClose={() => setShowTaskSelector(false)}
+        onSelect={handleTaskSelect}
+        selectedTaskId={selectedTask?._id || null}
+      />
       {showFindReplace && (
         <div className="border-b bg-white px-4 py-3 shadow-sm">
           <div className="flex items-center space-x-3">
@@ -3794,7 +3856,11 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
       </div>
     </div>
   );
-}
+}) as React.ForwardRefExoticComponent<TiptapEditorProps & React.RefAttributes<TiptapEditorRef>>;
+
+TiptapEditor.displayName = 'TiptapEditor';
+
+export default TiptapEditor;
 
 interface QuickTagModalProps {
   isOpen: boolean;

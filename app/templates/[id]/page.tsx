@@ -2,9 +2,9 @@
 
 import { useEffect, useRef, useState, use } from 'react';
 import Layout from '@/components/Layout';
-import TiptapEditor from '@/components/TiptapEditor';
+import TiptapEditor, { TiptapEditorRef } from '@/components/TiptapEditor';
 import TemplateTagList, { TemplateTag } from '@/components/TemplateTagList';
-import { ArrowLeft, FileInput, RefreshCcw, X } from 'lucide-react';
+import { ArrowLeft, FileInput, RefreshCcw, X, ClipboardList } from 'lucide-react';
 
 interface TemplateDetail {
   _id: string;
@@ -21,7 +21,15 @@ export default function TemplateEditorPage({ params }: { params: Promise<{ id: s
   const [error, setError] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [importProgress, setImportProgress] = useState(0);
+  const [selectedTask, setSelectedTask] = useState<{
+    _id: string;
+    taskNumber: string;
+    taskName: string;
+    categoryId: string;
+    taskTypeId: string;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const editorRef = useRef<TiptapEditorRef | null>(null);
 
   const loadTemplate = async (templateId: string) => {
     setLoading(true);
@@ -133,12 +141,14 @@ export default function TemplateEditorPage({ params }: { params: Promise<{ id: s
 
     return (
       <TiptapEditor
+        ref={editorRef}
         content={template.content}
         onSave={handleSaveTemplate}
         tags={template.tags || []}
         onChangeTags={handleTagsChange}
         templateId={template._id}
         templateName={template.name}
+        onTaskChange={setSelectedTask}
       />
     );
   };
@@ -165,6 +175,13 @@ export default function TemplateEditorPage({ params }: { params: Promise<{ id: s
             >
               <ArrowLeft className="w-4 h-4" />
               <span>返回列表</span>
+            </button>
+            <button
+              onClick={() => editorRef.current?.openTaskSelector()}
+              className="inline-flex items-center space-x-2 px-4 py-2 border rounded text-gray-700 hover:bg-gray-50"
+            >
+              <ClipboardList className="w-4 h-4" />
+              <span>{selectedTask ? selectedTask.taskName : '关联任务'}</span>
             </button>
             <button
               onClick={() => fileInputRef.current?.click()}
