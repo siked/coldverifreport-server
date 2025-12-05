@@ -151,6 +151,38 @@ const CustomImage = Node.create({
   },
 });
 
+// 分页符扩展
+const PageBreak = Node.create({
+  name: 'pageBreak',
+  group: 'block',
+  parseHTML() {
+    return [
+      {
+        tag: 'div[data-type="page-break"]',
+      },
+    ];
+  },
+  renderHTML() {
+    return [
+      'div',
+      {
+        'data-type': 'page-break',
+        class: 'page-break',
+        style: 'page-break-after: always; break-after: page; margin: 2rem 0; border-top: 2px dashed #cbd5e1; padding-top: 2rem;',
+      },
+    ];
+  },
+  addCommands() {
+    return {
+      setPageBreak: () => ({ commands }) => {
+        return commands.insertContent({
+          type: this.name,
+        });
+      },
+    };
+  },
+});
+
 // 自定义 TableCell 扩展，支持 style 属性
 const CustomTableCell = TableCell.extend({
   addAttributes() {
@@ -424,6 +456,8 @@ import {
   Plug,
   PlusCircle,
   FlaskConical,
+  FileText,
+  Copy,
 } from 'lucide-react';
 import Modal from './Modal';
 import type { TemplateTag } from './TemplateTagList';
@@ -689,6 +723,16 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
   });
   const [isTestingApi, setIsTestingApi] = useState(false);
   const [apiTestResult, setApiTestResult] = useState<{ success: boolean; value?: string; message: string } | null>(null);
+  
+  // 页面格式定义（参考 @tiptap-pro/extension-pages）
+  const PAGE_FORMATS = {
+    A5: { name: 'A5', width: 148, height: 210 }, // mm
+    A4: { name: 'A4', width: 210, height: 297 },
+    A3: { name: 'A3', width: 297, height: 420 },
+  } as const;
+  
+  type PageFormatType = keyof typeof PAGE_FORMATS;
+  const [pageFormat, setPageFormat] = useState<PageFormatType>('A4');
 
   const htmlContent = useMemo(() => {
     try {
@@ -789,6 +833,7 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
       TaskItem.configure({
         nested: true,
       }),
+      PageBreak,
     ],
     content: htmlContent,
     editorProps: {
@@ -1529,6 +1574,30 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
     }
   }, [applyDataSourceToImage, applyDataSourceToText, editor, fetchApiValue]);
 
+  // 页面格式设置函数（类似官方扩展的 API）
+  const setPageFormatCommand = useCallback((format: PageFormatType) => {
+    setPageFormat(format);
+  }, []);
+
+  // 页面格式样式计算
+  const getPageFormatStyle = useMemo(() => {
+    // 转换为像素（96 DPI）：1mm ≈ 3.7795px
+    const format = PAGE_FORMATS[pageFormat];
+    const widthPx = Math.round(format.width * 3.7795);
+    const heightPx = Math.round(format.height * 3.7795);
+    return {
+      maxWidth: `${widthPx}px`,
+      width: '100%',
+      margin: '0 auto 2rem auto', // 每页之间有间距
+      backgroundColor: '#fff',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+      padding: '40px',
+      minHeight: `${heightPx}px`, // 使用页面高度
+      pageBreakAfter: 'always', // 打印时分页
+      breakAfter: 'page',
+    };
+  }, [pageFormat]);
+
   const buttonCommon =
     'p-2 rounded hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors';
 
@@ -1666,6 +1735,35 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
             title="插入表格"
           >
             <TableIcon className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* 页面格式 */}
+        <div className="flex items-center space-x-1 border-r pr-2">
+          <FileText className="w-4 h-4 text-gray-600 mr-1" />
+          <select
+            value={pageFormat}
+            onChange={(e) => setPageFormat(e.target.value as PageFormatType)}
+            className="px-2 py-1 text-sm border rounded focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white text-gray-700"
+            title="页面尺寸"
+          >
+            {(Object.keys(PAGE_FORMATS) as PageFormatType[]).map((format) => (
+              <option key={format} value={format}>
+                {PAGE_FORMATS[format].name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* 分页符 */}
+        <div className="flex items-center space-x-1 border-r pr-2">
+          <button
+            type="button"
+            onClick={() => editor.chain().focus().setPageBreak().run()}
+            className={buttonCommon}
+            title="插入分页符"
+          >
+            <Copy className="w-4 h-4" />
           </button>
         </div>
 
@@ -2989,8 +3087,10 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags }: Ti
           </div>
         </div>
       )}
-      <div className="flex-1 overflow-auto">
-        <EditorContent editor={editor} className="h-full" />
+      <div className="flex-1 overflow-auto bg-gray-100 p-4">
+        <div style={getPageFormatStyle} className="mx-auto">
+          <EditorContent editor={editor} className="h-full" />
+        </div>
       </div>
     </div>
   );
