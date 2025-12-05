@@ -264,6 +264,7 @@ type TagDataSource = {
   tagName: string;
   tagType: TemplateTag['type'];
   value: string;
+  formatting?: TagFormattingOption | null;
 };
 
 type ApiDataSource = {
@@ -470,7 +471,71 @@ const extractValueByPath = (data: any, path?: string) => {
   }, data);
 };
 
-const formatTagValue = (tag: TemplateTag): string => {
+const parseToDate = (value: any) => {
+  if (!value) return null;
+  if (value instanceof Date) {
+    return isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value === 'number') {
+    const date = new Date(value);
+    return isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof value === 'string') {
+    const normalized = value.includes('T') ? value : value.replace(' ', 'T');
+    const date = new Date(normalized);
+    return isNaN(date.getTime()) ? null : date;
+  }
+  return null;
+};
+
+const formatDateValue = (value: any, pattern: string) => {
+  const date = parseToDate(value);
+  if (!date) return typeof value === 'string' ? value : value?.toString() || '';
+
+  const year = String(date.getFullYear());
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+
+  const replaceToken = (input: string, token: string, valueToUse: string) =>
+    input.replace(new RegExp(token, 'g'), valueToUse);
+
+  let output = pattern || 'YYYY-MM-DD HH:mm:ss';
+  output = replaceToken(output, 'YYYY', year);
+  output = replaceToken(output, 'yyyy', year);
+  output = replaceToken(output, 'MM', month);
+  output = replaceToken(output, 'DD', day);
+  output = replaceToken(output, 'dd', day);
+  output = replaceToken(output, 'HH', hours);
+  output = replaceToken(output, 'mm', minutes);
+  output = replaceToken(output, 'ss', seconds);
+
+  return output;
+};
+
+const formatTagValue = (tag: TemplateTag, formatting?: TagFormattingOption | null): string => {
+  if (
+    (tag.type === 'date' || tag.type === 'datetime') &&
+    formatting &&
+    (formatting.type === 'date' || formatting.type === 'datetime')
+  ) {
+    return formatDateValue(tag.value, formatting.pattern);
+  }
+
+  if (tag.type === 'number' && formatting?.type === 'number') {
+    const num = typeof tag.value === 'number' ? tag.value : Number(tag.value);
+    if (!Number.isNaN(num)) {
+      const decimals = Math.max(0, Math.min(20, formatting.decimals ?? 0));
+      return num.toFixed(decimals);
+    }
+  }
+
+  if (tag.type === 'boolean' && formatting?.type === 'boolean') {
+    return tag.value ? formatting.trueText : formatting.falseText;
+  }
+
   if (tag.type === 'location' && Array.isArray(tag.value)) {
     return tag.value.join('、');
   }
@@ -522,7 +587,7 @@ import type { TemplateTag } from './TemplateTagList';
 import DataSourceApiPanel from './tiptap/DataSourceApiPanel';
 import DataSourceMenu from './tiptap/DataSourceMenu';
 import OutlineSidebar from './tiptap/OutlineSidebar';
-import TagSelectorPanel from './tiptap/TagSelectorPanel';
+import TagSelectorPanel, { TagFormattingOption } from './tiptap/TagSelectorPanel';
 import type { ApiFormState, ApiTestResult, HeadingItem } from './tiptap/types';
 
 interface TiptapEditorProps {
@@ -1657,18 +1722,19 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
   );
 
   const handleApplyTag = useCallback(
-    (tag: TemplateTag) => {
+    (tag: TemplateTag, formatting?: TagFormattingOption | null) => {
       if (!dataSourceMenu) return;
+      const textValue = formatTagValue(tag, formatting);
       const payload: TagDataSource = {
         type: 'tag',
         tagId: tag._id || generateTempId(),
         tagName: tag.name,
         tagType: tag.type,
-        value: formatTagValue(tag),
+        value: textValue,
+        formatting,
       };
 
       if (dataSourceMenu.targetType === 'text' && dataSourceMenu.range) {
-        const textValue = formatTagValue(tag);
         applyDataSourceToText(dataSourceMenu.range, payload, textValue);
       } else if (
         dataSourceMenu.targetType === 'image' &&
@@ -2762,6 +2828,138 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
     refreshApiDataSources();
   }, [editor, refreshApiDataSources]);
 
+  // 同步标签值变化到文档中的数据来源
+  const prevTagsRef = useRef<TemplateTag[]>(tags);
+  useEffect(() => {
+    if (!editor) return;
+    
+    // 比较标签值变化，找出改变的标签（通过 tagId 匹配）
+    const changedTags: TemplateTag[] = [];
+    tags.forEach((tag) => {
+      if (!tag._id) return;
+      const prevTag = prevTagsRef.current.find((t) => t._id === tag._id);
+      if (!prevTag) {
+        // 新标签，不需要更新文档（文档中还没有使用它）
+        return;
+      }
+      // 深度比较值是否改变
+      let valueChanged = false;
+      if (Array.isArray(tag.value) && Array.isArray(prevTag.value)) {
+        valueChanged = JSON.stringify(tag.value) !== JSON.stringify(prevTag.value);
+      } else {
+        valueChanged = tag.value !== prevTag.value;
+      }
+      if (valueChanged) {
+        changedTags.push(tag);
+      }
+    });
+
+    if (changedTags.length === 0) {
+      prevTagsRef.current = tags;
+      return;
+    }
+
+    // 遍历文档，找到所有使用这些标签的数据来源并更新
+    const markType = editor.state.schema.marks.dataSource;
+    const updates: Array<{ kind: 'text'; range: { from: number; to: number }; payload: TagDataSource } | { kind: 'image'; pos: number; payload: TagDataSource }> = [];
+    const visitedRanges = new Set<string>();
+
+    editor.state.doc.descendants((node, pos) => {
+      // 处理文本节点中的数据来源标记
+      if (node.isText && markType) {
+        const mark = markType.isInSet(node.marks);
+        if (mark) {
+          const payload = parseDataSource(mark.attrs.data);
+          if (payload?.type === 'tag') {
+            const tagPayload = payload as TagDataSource;
+            const changedTag = changedTags.find((t) => t._id === tagPayload.tagId);
+            if (changedTag) {
+              const range = getMarkRange(editor.state.doc.resolve(pos), markType);
+              if (range) {
+                const key = `${range.from}-${range.to}`;
+                if (!visitedRanges.has(key)) {
+                  visitedRanges.add(key);
+                  const updatedPayload: TagDataSource = {
+                    ...tagPayload,
+                    tagName: changedTag.name,
+                    tagType: changedTag.type,
+                    value: formatTagValue(changedTag, tagPayload.formatting),
+                  };
+                  updates.push({ kind: 'text', range, payload: updatedPayload });
+                }
+              }
+            }
+          }
+        }
+      }
+      // 处理图片节点中的数据来源
+      else if (node.type.name === 'image' && node.attrs.dataSource) {
+        const payload = parseDataSource(node.attrs.dataSource);
+        if (payload?.type === 'tag') {
+          const tagPayload = payload as TagDataSource;
+          const changedTag = changedTags.find((t) => t._id === tagPayload.tagId);
+          if (changedTag) {
+            const updatedPayload: TagDataSource = {
+              ...tagPayload,
+              tagName: changedTag.name,
+              tagType: changedTag.type,
+              value: changedTag.value,
+            };
+            updates.push({ kind: 'image', pos, payload: updatedPayload });
+          }
+        }
+      }
+      return true;
+    });
+
+    // 批量更新文档
+    if (updates.length > 0) {
+      editor.chain().focus().command(({ tr, state }) => {
+        // 从后往前更新，避免位置偏移
+        const sortedUpdates = [...updates].sort((a, b) => {
+          const posA = a.kind === 'text' ? a.range.from : a.pos;
+          const posB = b.kind === 'text' ? b.range.from : b.pos;
+          return posB - posA;
+        });
+
+        sortedUpdates.forEach((update) => {
+          if (update.kind === 'text') {
+            const { range, payload } = update;
+            const tag = tags.find((t) => t._id === payload.tagId);
+            if (!tag) return;
+            const displayValue = formatTagValue(tag, payload.formatting);
+            tr.insertText(displayValue, range.from, range.to);
+            if (markType) {
+              const mark = markType.create({
+                data: stringifyDataSource(payload),
+                sourceType: payload.type,
+                tooltip: formatTooltip(payload),
+              });
+              tr.addMark(range.from, range.from + displayValue.length, mark);
+            }
+          } else if (update.kind === 'image') {
+            const { pos, payload } = update;
+            const node = state.doc.nodeAt(pos);
+            if (node && node.type.name === 'image') {
+              const tag = tags.find((t) => t._id === payload.tagId);
+              const nextSrc = tag?.value || node.attrs.src;
+              tr.setNodeMarkup(pos, undefined, {
+                ...node.attrs,
+                src: nextSrc,
+                dataSource: stringifyDataSource(payload),
+                dataSourceType: payload.type,
+                tooltip: formatTooltip(payload),
+              });
+            }
+          }
+        });
+        return true;
+      }).run();
+    }
+
+    prevTagsRef.current = tags;
+  }, [tags, editor, formatTagValue]);
+
   // 点击外部关闭页眉页脚菜单
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -3251,6 +3449,9 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
             setDataSourceMenu(null);
           }}
           formatTagValue={formatTagValue}
+          existingSource={
+            dataSourceMenu.existingSource?.type === 'tag' ? dataSourceMenu.existingSource : null
+          }
         />
       )}
       {dataSourceMenu && activeDataSourcePanel === 'api' && (
