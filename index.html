@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>相似趋势曲线生成</title>
+  <!-- 引入ECharts -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+  <style>
+    #chart { width: 1000px; height: 500px; margin: 20px auto; }
+    .btn-group { text-align: center; margin: 20px; }
+    button { padding: 8px 20px; margin: 0 10px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div class="btn-group">
+    <button id="generate">生成相似曲线</button>
+    <button id="reset">重置</button>
+  </div>
+  <div id="chart"></div>
+
+  <script>
+    // 初始化ECharts实例
+    const chart = echarts.init(document.getElementById('chart'));
+
+    // 1. 模拟原始趋势数据（可替换为真实业务数据）
+    const originalData = [
+      { x: 0, y: 10 }, { x: 1, y: 15 }, { x: 2, y: 12 }, { x: 3, y: 18 },
+      { x: 4, y: 25 }, { x: 5, y: 20 }, { x: 6, y: 28 }, { x: 7, y: 22 },
+      { x: 8, y: 30 }, { x: 9, y: 25 }, { x: 10, y: 35 }, { x: 11, y: 32 }
+    ];
+
+    // 2. 特征提取函数：提取原始数据的核心特征
+    function extractFeatures(data) {
+      const xs = data.map(item => item.x);
+      const ys = data.map(item => item.y);
+      
+      // 全局特征
+      const length = data.length;
+      const meanY = ys.reduce((a, b) => a + b, 0) / length;
+      const minY = Math.min(...ys);
+      const maxY = Math.max(...ys);
+      const totalAmplitude = maxY - minY;
+      // 整体趋势：最后一个点 - 第一个点（正=上升，负=下降，0=平稳）
+      const trend = ys[length - 1] - ys[0];
+
+      // 局部特征：提取极值点（波峰/波谷）
+      const extremums = [];
+      for (let i = 1; i < length - 1; i++) {
+        // 波峰：当前点 > 左右点
+        if (ys[i] > ys[i-1] && ys[i] > ys[i+1]) {
+          extremums.push({ type: 'peak', x: xs[i], y: ys[i] });
+        }
+        // 波谷：当前点 < 左右点
+        else if (ys[i] < ys[i-1] && ys[i] < ys[i+1]) {
+          extremums.push({ type: 'valley', x: xs[i], y: ys[i] });
+        }
+      }
+      // 补充首尾点（保证曲线起点/终点一致）
+      extremums.unshift({ type: 'start', x: xs[0], y: ys[0] });
+      extremums.push({ type: 'end', x: xs[length-1], y: ys[length-1] });
+
+      return {
+        length, meanY, minY, maxY, totalAmplitude, trend,
+        extremums // 极值点（核心特征）
+      };
+    }
+
+    // 3. 相似曲线生成函数：基于特征生成曲线
+    function generateSimilarCurve(features, perturbation = 0.1) {
+      const { extremums, totalAmplitude } = features;
+      const similarData = [];
+
+      // 遍历每两个相邻极值点，生成中间插值
+      for (let i = 0; i < extremums.length - 1; i++) {
+        const curr = extremums[i];
+        const next = extremums[i+1];
+        const xStep = next.x - curr.x; // x轴间隔
+        const yDiff = next.y - curr.y; // y轴差值
+
+        // 生成两个极值点之间的所有点（保留x轴位置，y轴加随机扰动）
+        for (let x = curr.x; x <= next.x; x++) {
+          // 计算原始趋势的y值（线性插值）
+          const ratio = (x - curr.x) / xStep;
+          const baseY = curr.y + yDiff * ratio;
+          
+          // 加入随机扰动（扰动幅度基于总波动幅度，保证相似性）
+          const randomPerturb = (Math.random() - 0.5) * totalAmplitude * perturbation;
+          const similarY = baseY + randomPerturb;
+
+          similarData.push({ x, y: Math.max(0, similarY) }); // 保证y值非负（可选）
+        }
+      }
+
+      return similarData;
+    }
+
+    // 4. 图表渲染函数
+    function renderChart(original, similar = null) {
+      const option = {
+        title: { text: '原始趋势 vs 相似曲线', left: 'center' },
+        tooltip: { trigger: 'axis' },
+        legend: { data: ['原始曲线', '相似曲线'], bottom: 0 },
+        xAxis: { type: 'value', name: 'X' },
+        yAxis: { type: 'value', name: 'Y' },
+        series: [
+          {
+            name: '原始曲线',
+            type: 'line',
+            data: original.map(item => [item.x, item.y]),
+            lineStyle: { width: 2, color: '#409EFF' },
+            itemStyle: { color: '#409EFF' }
+          }
+        ]
+      };
+
+      // 如果有相似曲线，添加到系列
+      if (similar) {
+        option.series.push({
+          name: '相似曲线',
+          type: 'line',
+          data: similar.map(item => [item.x, item.y]),
+          lineStyle: { width: 2, color: '#F56C6C', type: 'dashed' },
+          itemStyle: { color: '#F56C6C' }
+        });
+      }
+
+      chart.setOption(option);
+    }
+
+    // 5. 事件绑定
+    document.getElementById('generate').addEventListener('click', () => {
+      const features = extractFeatures(originalData);
+      const similarData = generateSimilarCurve(features, 0.15); // 扰动幅度15%
+      renderChart(originalData, similarData);
+    });
+
+    document.getElementById('reset').addEventListener('click', () => {
+      renderChart(originalData);
+    });
+
+    // 初始化渲染
+    renderChart(originalData);
+  </script>
+</body>
+</html>
