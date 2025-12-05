@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Image from '@tiptap/extension-image';
@@ -298,6 +298,14 @@ interface ApiFormState {
   dataPath: string;
 }
 
+type HeadingItem = {
+  id: string;
+  level: 1 | 2 | 3;
+  text: string;
+  pos: number;
+  endPos: number;
+};
+
 const DataSourceMark = Mark.create({
   name: 'dataSource',
   inclusive: true,
@@ -338,6 +346,41 @@ const DataSourceMark = Mark.create({
     ];
   },
 });
+
+const collectHeadings = (doc: any): HeadingItem[] => {
+  const collected: HeadingItem[] = [];
+  doc.descendants((node: any, pos: number) => {
+    if (node.type?.name === 'heading' && [1, 2, 3].includes(node.attrs?.level)) {
+      collected.push({
+        id: `h-${pos}-${node.attrs.level}`,
+        level: node.attrs.level as 1 | 2 | 3,
+        text: (node.textContent || '').trim() || '（空标题）',
+        pos,
+        endPos: doc.content.size,
+      });
+    }
+    return true;
+  });
+
+  collected.forEach((item, index) => {
+    const nextBlock = collected
+      .slice(index + 1)
+      .find((h) => h.level <= item.level);
+    item.endPos = nextBlock ? nextBlock.pos : doc.content.size;
+  });
+
+  return collected;
+};
+
+const getParentKey = (list: HeadingItem[], index: number): string => {
+  const current = list[index];
+  for (let i = index - 1; i >= 0; i--) {
+    if (list[i].level < current.level) {
+      return list[i].id;
+    }
+  }
+  return 'root';
+};
 
 const DATA_SOURCE_STYLES = `
 .prose .${DATA_SOURCE_CLASS} {
@@ -482,6 +525,7 @@ import {
   Rows,
   Trash2,
   Plus,
+  GripVertical,
   Search,
   ChevronDown,
   ChevronUp,
@@ -745,6 +789,12 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [matches, setMatches] = useState<Array<{ from: number; to: number }>>([]);
   const [caseSensitive, setCaseSensitive] = useState(false);
+  const [headings, setHeadings] = useState<HeadingItem[]>([]);
+  const [draggingHeadingId, setDraggingHeadingId] = useState<string | null>(null);
+  const [dragOverHeadingId, setDragOverHeadingId] = useState<string | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(260);
+  const [resizingSidebar, setResizingSidebar] = useState(false);
+  const sidebarRef = useRef<HTMLDivElement | null>(null);
   const [dataSourceMenu, setDataSourceMenu] = useState<DataSourceMenuState | null>(null);
   const [activeDataSourcePanel, setActiveDataSourcePanel] = useState<'tag' | 'api' | null>(null);
   const [tagSearch, setTagSearch] = useState('');
@@ -889,12 +939,18 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
     },
   });
 
+  const buildHeadings = useCallback(() => {
+    if (!editor) return;
+    setHeadings(collectHeadings(editor.state.doc));
+  }, [editor]);
+
   useEffect(() => {
     if (!editor) return;
     editor.commands.setContent(htmlContent, false);
     setInitialMarkdown(content || '');
     setCurrentMarkdown(content || '');
-  }, [editor, htmlContent, content]);
+    buildHeadings();
+  }, [editor, htmlContent, content, buildHeadings]);
 
   // 查找文本
   const findMatches = useCallback((text: string, caseSensitive: boolean) => {
@@ -942,6 +998,7 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
     const handleUpdate = () => {
       const nextMarkdown = turndown.turndown(editor.getHTML());
       setCurrentMarkdown(nextMarkdown);
+      buildHeadings();
       
       // 如果查找替换面板打开且有查找文本，重新查找
       if (showFindReplace && findText) {
@@ -955,7 +1012,7 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
     return () => {
       editor.off('update', handleUpdate);
     };
-  }, [editor, turndown, showFindReplace, findText, caseSensitive, findMatches]);
+  }, [editor, turndown, showFindReplace, findText, caseSensitive, findMatches, buildHeadings]);
 
   const hasChanges = currentMarkdown !== initialMarkdown;
 
@@ -1213,6 +1270,122 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
       findMatches(findText, caseSensitive);
     }, 100);
   }, [editor, matches, replaceText, findText, caseSensitive, findMatches]);
+
+  const handleNavigateHeading = useCallback(
+    (heading: HeadingItem) => {
+      if (!editor) return;
+      const targetPos = Math.min(heading.pos + 1, editor.state.doc.content.size);
+      editor.chain().focus().setTextSelection(targetPos).run();
+      const dom = editor.view.nodeDOM(heading.pos);
+      if (dom instanceof HTMLElement) {
+        dom.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    },
+    [editor]
+  );
+
+  const handleDeleteHeadingSection = useCallback(
+    (headingId: string) => {
+      if (!editor) return;
+      const target = headings.find((h) => h.id === headingId);
+      if (!target) return;
+      editor
+        .chain()
+        .focus()
+        .command(({ tr }) => {
+          tr.delete(target.pos, target.endPos);
+          return true;
+        })
+        .run();
+    },
+    [editor, headings]
+  );
+
+  const moveHeadingSection = useCallback(
+    (sourceId: string, targetId: string) => {
+      if (!editor) return;
+      // 使用最新文档快照，避免使用旧的位置信息导致内容丢失
+      const current = collectHeadings(editor.state.doc);
+      const sourceIndex = current.findIndex((h) => h.id === sourceId);
+      const targetIndex = current.findIndex((h) => h.id === targetId);
+      const source = current[sourceIndex];
+      const target = current[targetIndex];
+      if (!source || !target || source.id === target.id) return;
+      if (source.level !== target.level) return;
+      // 限制仅在同一父级（更高层级）内移动，避免跨区段吞掉内容
+      if (getParentKey(current, sourceIndex) !== getParentKey(current, targetIndex)) {
+        return;
+      }
+
+      const { state, view } = editor;
+      const from = source.pos;
+      const to = source.endPos;
+      const slice = state.doc.slice(from, to);
+      const tr = state.tr;
+      tr.delete(from, to);
+      // 使用 mapping 来获得删除后的正确插入位置，避免跨越时吞掉区段
+      const mappedPos = tr.mapping.map(target.pos);
+      tr.insert(mappedPos, slice.content);
+      view.dispatch(tr);
+      // 移动后立即重建目录，确保下一次拖拽使用最新范围
+      buildHeadings();
+    },
+    [editor, buildHeadings]
+  );
+
+  const handleHeadingDragStart = useCallback((headingId: string) => {
+    setDraggingHeadingId(headingId);
+    setDragOverHeadingId(null);
+  }, []);
+
+  const handleHeadingDragOver = useCallback(
+    (event: React.DragEvent, target: HeadingItem) => {
+      event.preventDefault();
+      if (!draggingHeadingId) return;
+      const source = headings.find((h) => h.id === draggingHeadingId);
+      if (!source || source.level !== target.level) return;
+      setDragOverHeadingId(target.id);
+    },
+    [draggingHeadingId, headings]
+  );
+
+  const handleHeadingDrop = useCallback(
+    (targetId: string) => {
+      if (draggingHeadingId && draggingHeadingId !== targetId) {
+        moveHeadingSection(draggingHeadingId, targetId);
+      }
+      setDraggingHeadingId(null);
+      setDragOverHeadingId(null);
+    },
+    [draggingHeadingId, moveHeadingSection]
+  );
+
+  const handleHeadingDragEnd = useCallback(() => {
+    setDraggingHeadingId(null);
+    setDragOverHeadingId(null);
+  }, []);
+
+  const startResizeSidebar = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setResizingSidebar(true);
+  }, []);
+
+  useEffect(() => {
+    if (!resizingSidebar) return;
+    const handleMove = (event: MouseEvent) => {
+      const rect = sidebarRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const next = Math.min(480, Math.max(180, event.clientX - rect.left));
+      setSidebarWidth(next);
+    };
+    const handleUp = () => setResizingSidebar(false);
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, [resizingSidebar]);
 
   // 当查找文本或大小写敏感选项改变时，重新查找
   useEffect(() => {
@@ -3439,29 +3612,119 @@ export default function TiptapEditor({ content, onSave, tags, onChangeTags, temp
           </div>
         </div>
       )}
-      <div className="flex-1 overflow-auto bg-gray-100 p-4">
-        <div style={getPageFormatStyle} className="mx-auto relative">
-          {/* 页眉 */}
-          {headerContent && (
-            <div className="page-header-footer page-header">
-              {headerContent}
+      <div className="flex-1 flex overflow-hidden bg-gray-100">
+        <aside
+          ref={sidebarRef}
+          className="relative border-r bg-white overflow-auto select-none"
+          style={{ width: `${sidebarWidth}px`, minWidth: '180px', maxWidth: '480px' }}
+        >
+          <div className="p-3 border-b flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-gray-800">目录</p>
+              <p className="text-xs text-gray-500">自动读取 H1 / H2 / H3</p>
             </div>
-          )}
-          
-          {/* 编辑器内容 */}
-          <EditorContent editor={editor} className="h-full" />
-          
-          {/* 页脚和页码 */}
-          {(footerContent || showPageNumber) && (
-            <div className="page-header-footer page-footer flex items-center justify-between">
-              <div>{footerContent}</div>
-              {showPageNumber && (
-                <div>
-                  {formatPageNumber(1, getTotalPages())}
-                </div>
-              )}
-            </div>
-          )}
+            <button
+              type="button"
+              onClick={buildHeadings}
+              className="p-1 rounded hover:bg-gray-100 text-gray-500"
+              title="刷新目录"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="p-2">
+            {headings.length === 0 ? (
+              <div className="text-xs text-gray-500 px-2 py-4 text-center">暂无标题</div>
+            ) : (
+              <ul className="space-y-1">
+                {headings.map((item) => {
+                  const isDragOver = dragOverHeadingId === item.id;
+                  const indent = (item.level - 1) * 12;
+                  return (
+                    <li
+                      key={item.id}
+                      draggable
+                      onDragStart={() => handleHeadingDragStart(item.id)}
+                      onDragEnd={handleHeadingDragEnd}
+                      onDragOver={(e) => handleHeadingDragOver(e, item)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        handleHeadingDrop(item.id);
+                      }}
+                      className={`group relative rounded transition-colors border-l-2 ${
+                        isDragOver ? 'border-primary-500 bg-primary-50' : 'border-transparent hover:bg-gray-50'
+                      }`}
+                    >
+                      {isDragOver && (
+                        <div className="pointer-events-none absolute left-3 right-2 -top-1 h-0.5 bg-primary-500 shadow-md animate-pulse rounded-full" />
+                      )}
+                      <div
+                        className="flex items-center px-2 py-2 space-x-2 cursor-pointer"
+                        onClick={() => handleNavigateHeading(item)}
+                      >
+                        <GripVertical className="w-4 h-4 text-gray-400 group-hover:text-gray-600" />
+                        <span
+                          className="text-[11px] text-gray-500 uppercase tracking-wide"
+                          style={{ minWidth: '28px' }}
+                        >
+                          H{item.level}
+                        </span>
+                        <span
+                          className="text-sm text-gray-700 truncate flex-1"
+                          style={{ paddingLeft: `${indent}px` }}
+                        >
+                          {item.text}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteHeadingSection(item.id);
+                          }}
+                          className="p-1 rounded text-gray-400 hover:text-red-600 hover:bg-red-50"
+                          title="删除该标题及其内容"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+          <div
+            className={`absolute top-0 right-0 w-1 h-full cursor-col-resize bg-transparent hover:bg-primary-200 ${
+              resizingSidebar ? 'bg-primary-300' : ''
+            }`}
+            onMouseDown={startResizeSidebar}
+            title="拖动调整目录宽度"
+          />
+        </aside>
+        <div className="flex-1 overflow-auto p-4">
+          <div style={getPageFormatStyle} className="mx-auto relative">
+            {/* 页眉 */}
+            {headerContent && (
+              <div className="page-header-footer page-header">
+                {headerContent}
+              </div>
+            )}
+            
+            {/* 编辑器内容 */}
+            <EditorContent editor={editor} className="h-full" />
+            
+            {/* 页脚和页码 */}
+            {(footerContent || showPageNumber) && (
+              <div className="page-header-footer page-footer flex items-center justify-between">
+                <div>{footerContent}</div>
+                {showPageNumber && (
+                  <div>
+                    {formatPageNumber(1, getTotalPages())}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>
