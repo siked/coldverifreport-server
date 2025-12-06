@@ -14,6 +14,10 @@ import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
+import Color from '@tiptap/extension-color';
+import TextStyle from '@tiptap/extension-text-style';
+import Highlight from '@tiptap/extension-highlight';
+import TextAlign from '@tiptap/extension-text-align';
 import { createLowlight } from 'lowlight';
 import javascript from 'highlight.js/lib/languages/javascript';
 import typescript from 'highlight.js/lib/languages/typescript';
@@ -241,6 +245,61 @@ const CustomTableHeader = TableHeader.extend({
             style: attributes.style,
           };
         },
+      },
+    };
+  },
+});
+
+// 字体大小扩展
+const FontSize = TextStyle.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      fontSize: {
+        default: null,
+        parseHTML: (element) => {
+          const fontSize = element.style.fontSize;
+          if (fontSize) {
+            return fontSize;
+          }
+          // 支持中文字体大小（小三、小四等）
+          const classList = Array.from(element.classList);
+          for (const className of classList) {
+            if (className.includes('font-size-')) {
+              return className.replace('font-size-', '');
+            }
+          }
+          return null;
+        },
+        renderHTML: (attributes) => {
+          if (!attributes.fontSize) {
+            return {};
+          }
+          // 如果是中文字体大小，使用 class；否则使用 style
+          const fontSizeMap: Record<string, string> = {
+            '小三': '10.5pt',
+            '小四': '12pt',
+            '小五': '9pt',
+            '小六': '7.5pt',
+            '七号': '5.5pt',
+            '八号': '5pt',
+          };
+          const fontSize = fontSizeMap[attributes.fontSize] || attributes.fontSize;
+          return {
+            style: `font-size: ${fontSize}`,
+          };
+        },
+      },
+    };
+  },
+  addCommands() {
+    return {
+      ...this.parent?.(),
+      setFontSize: (fontSize: string) => ({ chain }: any) => {
+        return chain().setMark(this.name, { fontSize }).run();
+      },
+      unsetFontSize: () => ({ chain }: any) => {
+        return chain().setMark(this.name, { fontSize: null }).removeEmptyTextStyle().run();
       },
     };
   },
@@ -596,6 +655,13 @@ import {
   Copy,
   FileDown,
   ClipboardList,
+  AlignLeft,
+  AlignCenter,
+  AlignRight,
+  AlignJustify,
+  Palette,
+  Type,
+  Highlighter,
 } from 'lucide-react';
 import Modal from './Modal';
 import type { TemplateTag } from './TemplateTagList';
@@ -838,6 +904,43 @@ const createTurndown = () => {
     replacement: () => '\n',
   });
 
+  // 文本对齐规则优化：使用 innerHTML 而不是 content 参数，保留原始 HTML 结构
+  turndown.addRule('textAlign', {
+    filter: (node) => {
+      const element = node as HTMLElement;
+      if (!element.style) return false;
+      const textAlign = element.style.textAlign || (typeof window !== 'undefined' ? window.getComputedStyle(element).textAlign : '');
+      return Boolean(textAlign && ['left', 'center', 'right', 'justify'].includes(textAlign));
+    },
+    replacement: (content, node) => {
+      const element = node as HTMLElement;
+      const textAlign = element.style.textAlign || (typeof window !== 'undefined' ? window.getComputedStyle(element).textAlign : '');
+      if (!textAlign || textAlign === 'left') {
+        return content;
+      }
+      // 使用 innerHTML 保留原始 HTML 结构，避免 Markdown 语法被重复处理
+      const clonedElement = element.cloneNode(true) as HTMLElement;
+      clonedElement.style.textAlign = textAlign;
+      return clonedElement.outerHTML;
+    },
+  });
+
+  // 段落对齐处理
+  turndown.addRule('paragraphAlign', {
+    filter: 'p',
+    replacement: (content, node) => {
+      const element = node as HTMLElement;
+      const textAlign = element.style.textAlign || (typeof window !== 'undefined' ? window.getComputedStyle(element).textAlign : '');
+      if (!textAlign || textAlign === 'left') {
+        return content;
+      }
+      // 使用 innerHTML 保留原始 HTML 结构
+      const clonedElement = element.cloneNode(true) as HTMLElement;
+      clonedElement.style.textAlign = textAlign;
+      return clonedElement.outerHTML;
+    },
+  });
+
   return turndown;
 };
 
@@ -956,6 +1059,8 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
         sanitize: false,
         smartLists: true,
         smartypants: false,
+        headerIds: false, // 不生成 header ID
+        mangle: false, // 不混淆邮箱地址
       };
       
       let html: string;
@@ -1100,6 +1205,15 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
         nested: true,
       }),
       PageBreak,
+      TextStyle,
+      Color,
+      Highlight.configure({
+        multicolor: true,
+      }),
+      FontSize,
+      TextAlign.configure({
+        types: ['heading', 'paragraph'],
+      }),
     ],
     content: htmlContent,
     editorProps: {
@@ -1138,7 +1252,7 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
 
     // 遍历文档中的所有文本节点
     doc.descendants((node, pos) => {
-      if (node.isText) {
+      if (node.isText && node.text) {
         const nodeText = caseSensitive ? node.text : node.text.toLowerCase();
         let searchStart = 0;
 
@@ -2280,6 +2394,168 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
           >
             <Italic className="w-4 h-4" />
           </button>
+          {/* 字体颜色 */}
+          <div className="relative group">
+            <button
+              type="button"
+              className={`${buttonCommon} flex items-center space-x-1`}
+              title="字体颜色"
+              onClick={(e) => {
+                e.stopPropagation();
+                const menu = document.getElementById('color-menu');
+                if (menu) {
+                  const isHidden = menu.classList.contains('hidden');
+                  document.querySelectorAll('#color-menu').forEach((m) => {
+                    m.classList.add('hidden');
+                  });
+                  if (isHidden) {
+                    menu.classList.remove('hidden');
+                  } else {
+                    menu.classList.add('hidden');
+                  }
+                }
+              }}
+            >
+              <Palette className="w-4 h-4" />
+            </button>
+            <div
+              id="color-menu"
+              className="hidden absolute top-full left-0 mt-1 bg-white border rounded-lg shadow-lg p-2 z-50"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="grid grid-cols-8 gap-1">
+                {['#000000', '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#FF00FF', '#00FFFF', '#FFFFFF', '#808080', '#800000', '#008000', '#000080', '#808000', '#800080', '#008080', '#C0C0C0'].map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    onClick={() => {
+                      if (editor) {
+                        editor.chain().focus().setColor(color).run();
+                        document.getElementById('color-menu')?.classList.add('hidden');
+                      }
+                    }}
+                    className="w-6 h-6 rounded border border-gray-300 hover:scale-110 transition-transform"
+                    style={{ backgroundColor: color }}
+                    title={color}
+                  />
+                ))}
+              </div>
+              <input
+                type="color"
+                onChange={(e) => {
+                  if (editor) {
+                    editor.chain().focus().setColor(e.target.value).run();
+                    document.getElementById('color-menu')?.classList.add('hidden');
+                  }
+                }}
+                className="w-full mt-2 h-8 rounded border"
+              />
+            </div>
+          </div>
+          {/* 背景颜色 */}
+          <div className="relative group">
+            <button
+              type="button"
+              className={`${buttonCommon} flex items-center space-x-1 ${editor.isActive('highlight') ? 'bg-gray-300' : ''}`}
+              title="背景颜色"
+              onClick={(e) => {
+                e.stopPropagation();
+                const menu = document.getElementById('highlight-menu');
+                if (menu) {
+                  const isHidden = menu.classList.contains('hidden');
+                  document.querySelectorAll('#highlight-menu').forEach((m) => {
+                    m.classList.add('hidden');
+                  });
+                  if (isHidden) {
+                    menu.classList.remove('hidden');
+                  } else {
+                    menu.classList.add('hidden');
+                  }
+                }
+              }}
+            >
+              <Highlighter className="w-4 h-4" />
+            </button>
+            <div
+              id="highlight-menu"
+              className="hidden absolute top-full left-0 mt-1 bg-white border rounded-lg shadow-lg p-2 z-50"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="grid grid-cols-8 gap-1">
+                {['#FFFF00', '#FF0000', '#00FF00', '#0000FF', '#FF00FF', '#00FFFF', '#FFA500', '#FFC0CB', '#808080', '#800000', '#008000', '#000080', '#808000', '#800080', '#008080', '#C0C0C0'].map((color) => (
+                  <button
+                    key={color}
+                    type="button"
+                    onClick={() => {
+                      if (editor) {
+                        editor.chain().focus().toggleHighlight({ color }).run();
+                        document.getElementById('highlight-menu')?.classList.add('hidden');
+                      }
+                    }}
+                    className="w-6 h-6 rounded border border-gray-300 hover:scale-110 transition-transform"
+                    style={{ backgroundColor: color }}
+                    title={color}
+                  />
+                ))}
+              </div>
+              <input
+                type="color"
+                onChange={(e) => {
+                  if (editor) {
+                    editor.chain().focus().toggleHighlight({ color: e.target.value }).run();
+                    document.getElementById('highlight-menu')?.classList.add('hidden');
+                  }
+                }}
+                className="w-full mt-2 h-8 rounded border"
+              />
+            </div>
+          </div>
+          {/* 字体大小 */}
+          <div className="relative group">
+            <button
+              type="button"
+              className={`${buttonCommon} flex items-center space-x-1`}
+              title="字体大小"
+              onClick={(e) => {
+                e.stopPropagation();
+                const menu = document.getElementById('font-size-menu');
+                if (menu) {
+                  const isHidden = menu.classList.contains('hidden');
+                  document.querySelectorAll('#font-size-menu').forEach((m) => {
+                    m.classList.add('hidden');
+                  });
+                  if (isHidden) {
+                    menu.classList.remove('hidden');
+                  } else {
+                    menu.classList.add('hidden');
+                  }
+                }
+              }}
+            >
+              <Type className="w-4 h-4" />
+            </button>
+            <div
+              id="font-size-menu"
+              className="hidden absolute top-full left-0 mt-1 bg-white border rounded-lg shadow-lg p-2 z-50 min-w-[120px]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {['小三', '小四', '小五', '小六', '七号', '八号', '12pt', '14pt', '16pt', '18pt', '20pt', '24pt'].map((size) => (
+                <button
+                  key={size}
+                  type="button"
+                  onClick={() => {
+                    if (editor) {
+                      (editor.chain().focus() as any).setFontSize(size).run();
+                      document.getElementById('font-size-menu')?.classList.add('hidden');
+                    }
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-sm hover:bg-gray-100 rounded"
+                >
+                  {size}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         {/* 标题 */}
@@ -2393,6 +2669,42 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
           </button>
         </div>
 
+        {/* 文本对齐 */}
+        <div className="flex items-center space-x-1 border-r pr-2">
+          <button
+            type="button"
+            onClick={() => editor && editor.chain().focus().setTextAlign('left').run()}
+            className={`${buttonCommon} ${editor?.isActive({ textAlign: 'left' }) ? 'bg-gray-300' : ''}`}
+            title="左对齐"
+          >
+            <AlignLeft className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => editor && editor.chain().focus().setTextAlign('center').run()}
+            className={`${buttonCommon} ${editor?.isActive({ textAlign: 'center' }) ? 'bg-gray-300' : ''}`}
+            title="居中"
+          >
+            <AlignCenter className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => editor && editor.chain().focus().setTextAlign('right').run()}
+            className={`${buttonCommon} ${editor?.isActive({ textAlign: 'right' }) ? 'bg-gray-300' : ''}`}
+            title="右对齐"
+          >
+            <AlignRight className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => editor && editor.chain().focus().setTextAlign('justify').run()}
+            className={`${buttonCommon} ${editor?.isActive({ textAlign: 'justify' }) ? 'bg-gray-300' : ''}`}
+            title="两端对齐"
+          >
+            <AlignJustify className="w-4 h-4" />
+          </button>
+        </div>
+
         {/* 页面设置（页面格式、页眉页脚页码） */}
         <div className="flex items-center space-x-1 border-r pr-2 relative group">
           <button
@@ -2498,7 +2810,7 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
         <div className="flex items-center space-x-1 border-r pr-2">
           <button
             type="button"
-            onClick={() => editor.chain().focus().setPageBreak().run()}
+            onClick={() => editor && (editor.chain().focus() as any).setPageBreak().run()}
             className={buttonCommon}
             title="插入分页符"
           >
