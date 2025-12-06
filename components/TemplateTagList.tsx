@@ -291,7 +291,7 @@ export default function TemplateTagList({ tags, onChange, templateId }: Template
             ) : null}
             <button
               type="button"
-              onClick={() => handleImageUpload(tagId, tag.type)}
+              onClick={() => handleImageUpload(tagId, tag.type as 'image' | 'cda-image')}
               disabled={isUploadingThis}
               className="w-full px-3 py-2 border rounded text-sm flex items-center justify-center space-x-2 hover:bg-gray-50 disabled:opacity-50"
             >
@@ -393,11 +393,90 @@ interface LocationInputProps {
 function LocationInput({ value, onChange }: LocationInputProps) {
   const [inputValue, setInputValue] = useState('');
 
+  // 解析输入，支持单个ID和范围
+  const parseInput = (input: string): string[] => {
+    const trimmed = input.trim();
+    if (!trimmed) return [];
+
+    // 尝试解析范围格式
+    // 格式1: C001 到 C010 或 C001到C010
+    const rangePattern1 = /^([A-Za-z]*)(\d+)\s*到\s*([A-Za-z]*)(\d+)$/i;
+    const match1 = trimmed.match(rangePattern1);
+    if (match1) {
+      const [, prefix1, startNumStr, prefix2, endNumStr] = match1;
+      const prefix = prefix1 || prefix2 || '';
+      const start = parseInt(startNumStr, 10);
+      const end = parseInt(endNumStr, 10);
+      if (start <= end && start > 0 && end > 0) {
+        // 使用起始数字字符串的长度来保持前导0
+        const padding = Math.max(startNumStr.length, endNumStr.length);
+        return generateRange(prefix, start, end, padding);
+      }
+    }
+
+    // 格式2: C001-C010
+    const rangePattern2 = /^([A-Za-z]*)(\d+)\s*-\s*([A-Za-z]*)(\d+)$/i;
+    const match2 = trimmed.match(rangePattern2);
+    if (match2) {
+      const [, prefix1, startNumStr, prefix2, endNumStr] = match2;
+      const prefix = prefix1 || prefix2 || '';
+      const start = parseInt(startNumStr, 10);
+      const end = parseInt(endNumStr, 10);
+      if (start <= end && start > 0 && end > 0) {
+        // 使用起始数字字符串的长度来保持前导0
+        const padding = Math.max(startNumStr.length, endNumStr.length);
+        return generateRange(prefix, start, end, padding);
+      }
+    }
+
+    // 格式3: 001~010（推断前缀，从已有值中获取或使用空字符串）
+    const rangePattern3 = /^(\d+)\s*~\s*(\d+)$/;
+    const match3 = trimmed.match(rangePattern3);
+    if (match3) {
+      const [, startNumStr, endNumStr] = match3;
+      const start = parseInt(startNumStr, 10);
+      const end = parseInt(endNumStr, 10);
+      if (start <= end && start > 0 && end > 0) {
+        // 尝试从已有值中推断前缀
+        let prefix = '';
+        if (value.length > 0) {
+          const lastValue = value[value.length - 1];
+          const prefixMatch = lastValue.match(/^([A-Za-z]+)/);
+          if (prefixMatch) {
+            prefix = prefixMatch[1];
+          }
+        }
+        // 使用起始数字字符串的长度来保持前导0
+        const padding = Math.max(startNumStr.length, endNumStr.length);
+        return generateRange(prefix, start, end, padding);
+      }
+    }
+
+    // 如果不是范围格式，作为单个ID返回
+    return [trimmed];
+  };
+
+  // 生成范围数组
+  const generateRange = (prefix: string, start: number, end: number, padding: number): string[] => {
+    const result: string[] = [];
+    for (let i = start; i <= end; i++) {
+      // 使用指定的 padding 来保持前导0
+      const numStr = i.toString().padStart(padding, '0');
+      result.push(`${prefix}${numStr}`);
+    }
+    return result;
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && inputValue.trim()) {
       e.preventDefault();
-      onChange([...value, inputValue.trim()]);
-      setInputValue('');
+      const parsed = parseInput(inputValue);
+      if (parsed.length > 0) {
+        // 去重并添加到现有值中
+        const newValues = [...new Set([...value, ...parsed])];
+        onChange(newValues);
+        setInputValue('');
+      }
     }
   };
 
@@ -413,7 +492,7 @@ function LocationInput({ value, onChange }: LocationInputProps) {
         onChange={(e) => setInputValue(e.target.value)}
         onKeyDown={handleKeyDown}
         className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-        placeholder="输入区域名称，按回车确认"
+        placeholder="如 C001、C001-C010 按回车"
       />
       <div className="flex flex-wrap gap-2">
         {value.map((location, index) => (

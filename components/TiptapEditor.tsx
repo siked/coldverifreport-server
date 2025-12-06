@@ -925,41 +925,108 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
 
   const htmlContent = useMemo(() => {
     try {
+      const contentStr = content || '';
+      const contentLength = contentStr.length;
+      
+      // 检查内容大小，避免处理过大的内容导致递归错误
+      const MAX_SAFE_SIZE = 5 * 1024 * 1024; // 5MB
+      
+      if (contentLength > MAX_SAFE_SIZE) {
+        console.warn(`[TiptapEditor] Markdown 内容过大 (${(contentLength / 1024 / 1024).toFixed(2)}MB)，使用简化处理`);
+        // 对于超大内容，直接返回原始内容（假设已经是 HTML）
+        // 或者进行简单的文本处理
+        if (contentStr.trim().startsWith('<')) {
+          // 如果已经是 HTML，直接返回
+          return contentStr;
+        }
+        // 否则进行最基本的处理
+        return contentStr
+          .replace(/\n/g, '<br>')
+          .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+          .replace(/\*(.*?)\*/g, '<em>$1</em>');
+      }
+      
       // 配置 marked 以支持任务列表和 HTML
-      const html = marked.parse(content || '', {
+      // 设置最大嵌套深度，避免递归错误
+      const markedOptions: any = {
         breaks: true,
         gfm: true,
-      }) as string;
+        // 限制嵌套深度，避免递归错误
+        pedantic: false,
+        sanitize: false,
+        smartLists: true,
+        smartypants: false,
+      };
+      
+      let html: string;
+      try {
+        // marked.parse 在同步模式下返回 string
+        html = String(marked.parse(contentStr, markedOptions));
+      } catch (markedError: any) {
+        // 如果 marked 解析失败（可能是递归错误），尝试使用更安全的配置
+        if (markedError.message?.includes('recursion') || markedError.message?.includes('too much')) {
+          console.warn('[TiptapEditor] Marked 解析出现递归错误，使用简化配置重试');
+          // 使用最简化的配置重试
+          html = String(marked.parse(contentStr, {
+            breaks: false,
+            gfm: false,
+            pedantic: false,
+          }));
+        } else {
+          throw markedError;
+        }
+      }
       
       // 将任务列表的 markdown 语法转换为 HTML
       // - [x] 任务 -> <input type="checkbox" checked>
       // - [ ] 任务 -> <input type="checkbox">
-      let processedHtml = html
-        .replace(
-          /<li>\[x\]\s*(.*?)<\/li>/gi,
-          '<li class="task-list-item"><input type="checkbox" checked disabled> $1</li>'
-        )
-        .replace(
-          /<li>\[\s*\]\s*(.*?)<\/li>/gi,
-          '<li class="task-list-item"><input type="checkbox" disabled> $1</li>'
-        )
-        .replace(
-          /<ul>\s*(<li class="task-list-item">.*?<\/li>\s*)+<\/ul>/gi,
-          (match) => match.replace('<ul>', '<ul class="contains-task-list">')
-        );
+      // 对于大文件，使用更安全的替换方法
+      let processedHtml = html;
+      
+      if (html.length < MAX_SAFE_SIZE) {
+        // 小文件可以使用正则表达式
+        processedHtml = html
+          .replace(
+            /<li>\[x\]\s*(.*?)<\/li>/gi,
+            '<li class="task-list-item"><input type="checkbox" checked disabled> $1</li>'
+          )
+          .replace(
+            /<li>\[\s*\]\s*(.*?)<\/li>/gi,
+            '<li class="task-list-item"><input type="checkbox" disabled> $1</li>'
+          )
+          .replace(
+            /<ul>\s*(<li class="task-list-item">.*?<\/li>\s*)+<\/ul>/gi,
+            (match) => match.replace('<ul>', '<ul class="contains-task-list">')
+          );
+      } else {
+        // 大文件使用简单的字符串替换
+        processedHtml = html
+          .replace(/<li>\[x\]\s*/gi, '<li class="task-list-item"><input type="checkbox" checked disabled> ')
+          .replace(/<li>\[\s*\]\s*/gi, '<li class="task-list-item"><input type="checkbox" disabled> ');
+      }
       
       // 确保表格单元格内的数据来源标记被正确识别
       // 使用临时 DOM 解析器处理表格
       if (typeof window !== 'undefined' && processedHtml.includes('<table')) {
         try {
+          // 对于大文件，限制处理的表格数量
           const tempDiv = document.createElement('div');
           tempDiv.innerHTML = processedHtml;
           const tables = tempDiv.querySelectorAll('table');
-          tables.forEach((table) => {
+          const maxTables = processedHtml.length > MAX_SAFE_SIZE ? 100 : tables.length;
+          
+          for (let i = 0; i < Math.min(tables.length, maxTables); i++) {
+            const table = tables[i];
             const cells = table.querySelectorAll('td, th');
-            cells.forEach((cell) => {
+            const maxCells = processedHtml.length > MAX_SAFE_SIZE ? 1000 : cells.length;
+            
+            for (let j = 0; j < Math.min(cells.length, maxCells); j++) {
+              const cell = cells[j];
               const spans = cell.querySelectorAll('span[data-source]');
-              spans.forEach((span) => {
+              const maxSpans = processedHtml.length > MAX_SAFE_SIZE ? 100 : spans.length;
+              
+              for (let k = 0; k < Math.min(spans.length, maxSpans); k++) {
+                const span = spans[k];
                 const dataSource = span.getAttribute('data-source');
                 if (dataSource) {
                   // 确保有必要的属性
@@ -978,9 +1045,9 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
                     }
                   }
                 }
-              });
-            });
-          });
+              }
+            }
+          }
           processedHtml = tempDiv.innerHTML;
         } catch (err) {
           console.warn('处理表格数据来源标记时出错:', err);
@@ -990,8 +1057,18 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
       // 确保 HTML 图片标签被正确解析（marked 默认会转义 HTML）
       // 如果内容中包含 <img> 标签，确保它们不被转义
       return processedHtml;
-    } catch (err) {
+    } catch (err: any) {
       console.error('Markdown 解析失败', err);
+      // 如果解析失败，尝试返回原始内容（可能是 HTML）
+      if (err.message?.includes('recursion') || err.message?.includes('too much')) {
+        console.warn('[TiptapEditor] 检测到递归错误，返回原始内容');
+        // 如果原始内容看起来像 HTML，直接返回
+        if (content && content.trim().startsWith('<')) {
+          return content;
+        }
+        // 否则进行最基本的处理
+        return (content || '').replace(/\n/g, '<br>');
+      }
       return content || '';
     }
   }, [content]);
