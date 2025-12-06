@@ -1,5 +1,5 @@
-import { PlusCircle, X } from 'lucide-react';
-import React, { useEffect, useMemo, useState } from 'react';
+import { PlusCircle, X, ChevronDown, Settings } from 'lucide-react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import type { TemplateTag } from '../TemplateTagList';
 
 export type TagFormattingOption =
@@ -14,7 +14,7 @@ interface TagSelectorPanelProps {
   tagSearch: string;
   onTagSearchChange: (value: string) => void;
   onApplyTag: (tag: TemplateTag, formatting?: TagFormattingOption | null) => void;
-  onOpenQuickAdd: () => void;
+  onOpenQuickAdd: (type: TemplateTag['type']) => void;
   onClose: () => void;
   formatTagValue: (tag: TemplateTag, formatting?: TagFormattingOption | null) => string;
   existingSource?: {
@@ -44,6 +44,14 @@ export default function TagSelectorPanel({
   const [decimalPlaces, setDecimalPlaces] = useState(1);
   const [trueText, setTrueText] = useState(DEFAULT_BOOLEAN_TRUE);
   const [falseText, setFalseText] = useState(DEFAULT_BOOLEAN_FALSE);
+  const [showQuickAddMenu, setShowQuickAddMenu] = useState(false);
+  const [showFormattingView, setShowFormattingView] = useState(false);
+  const formattingViewRef = useRef(false);
+  
+  // 同步 ref 和 state
+  useEffect(() => {
+    formattingViewRef.current = showFormattingView;
+  }, [showFormattingView]);
 
   // 自动选择首个标签或已有数据来源对应的标签
   useEffect(() => {
@@ -104,6 +112,29 @@ export default function TagSelectorPanel({
   }, [decimalPlaces, falseText, selectedTag, timeFormat, trueText]);
 
   const previewValue = selectedTag ? formatTagValue(selectedTag, currentFormatting) : '';
+
+  // 根据目标类型获取可用的标签类型
+  const availableTagTypes = useMemo(() => {
+    if (targetType === 'image') {
+      return [
+        { value: 'image' as const, label: '图片' },
+        { value: 'cda-image' as const, label: 'CDA 图片' },
+      ];
+    }
+    return [
+      { value: 'text' as const, label: '文本' },
+      { value: 'number' as const, label: '数字' },
+      { value: 'date' as const, label: '日期' },
+      { value: 'datetime' as const, label: '时间' },
+      { value: 'location' as const, label: '布点区域' },
+      { value: 'boolean' as const, label: '布尔' },
+    ];
+  }, [targetType]);
+
+  const handleQuickAddClick = (type: TemplateTag['type']) => {
+    setShowQuickAddMenu(false);
+    onOpenQuickAdd(type);
+  };
 
   const renderFormattingControls = () => {
     if (!selectedTag) return null;
@@ -177,14 +208,9 @@ export default function TagSelectorPanel({
       style={position}
       onClick={(e) => e.stopPropagation()}
     >
-      <div className="flex items-center justify-between mb-3">
-        <div>
-          <p className="text-sm font-semibold text-gray-800">选择标签值</p>
-          <p className="text-xs text-gray-500">当前目标：{targetType === 'image' ? '图片' : '文本'}</p>
-        </div>
-        <button onClick={onClose} className="p-1 rounded hover:bg-gray-100">
-          <X className="w-4 h-4" />
-        </button>
+      <div className="mb-3">
+        <p className="text-sm font-semibold text-gray-800">选择标签值</p>
+        <p className="text-xs text-gray-500">当前目标：{targetType === 'image' ? '图片' : '文本'}</p>
       </div>
       <div className="mb-3">
         <input
@@ -195,80 +221,150 @@ export default function TagSelectorPanel({
           className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
         />
       </div>
-      <div className="max-h-64 overflow-y-auto border rounded divide-y">
-        {filteredTags.length === 0 ? (
-          <div className="py-6 text-center text-sm text-gray-500">暂无可用标签</div>
+      <div className="max-h-64 overflow-y-auto border rounded" onClick={(e) => e.stopPropagation()}>
+        {showFormattingView && selectedTag ? (
+          <div className="p-4 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className="text-sm font-semibold text-gray-800">格式化设置</p>
+                <p className="text-xs text-gray-500">
+                  标签：<span className="font-medium text-gray-800">{selectedTag.name}</span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  formattingViewRef.current = false;
+                  setShowFormattingView(false);
+                }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                className="p-1 text-gray-400 hover:text-gray-600 rounded"
+                title="关闭格式化设置"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            {renderFormattingControls()}
+            <div>
+              <p className="text-xs text-gray-500 mb-1">预览</p>
+              <div className="px-3 py-2 bg-gray-50 border rounded text-sm text-gray-800 truncate">
+                {previewValue || '无内容'}
+              </div>
+            </div>
+          </div>
         ) : (
-          filteredTags.map((tag) => (
-            <button
-              key={tag._id}
-              className="w-full text-left px-3 py-2 hover:bg-primary-50 space-y-1"
-              onClick={() => setSelectedTagId(tag._id || '')}
-            >
-              <div className="flex items-center justify-between">
-                <span className="font-medium text-gray-800">{tag.name}</span>
-                <span className="text-xs text-gray-500 uppercase">{tag.type}</span>
-              </div>
-              <div className="text-xs text-gray-500 truncate">{tag.description || '无描述'}</div>
-              <div className="text-sm text-gray-700 truncate">
-                {tag.type === 'image' || tag.type === 'cda-image'
-                  ? tag.value
-                  : formatTagValue(
-                      tag,
-                      selectedTag && tag._id === selectedTag._id ? currentFormatting : null
-                    )}
-              </div>
-            </button>
-          ))
+          <div className="divide-y">
+            {filteredTags.length === 0 ? (
+              <div className="py-6 text-center text-sm text-gray-500">暂无可用标签</div>
+            ) : (
+              filteredTags.map((tag) => (
+                <div
+                  key={tag._id}
+                  className={`w-full px-3 py-2 hover:bg-primary-50 space-y-1 ${
+                    selectedTagId === tag._id ? 'bg-primary-50' : ''
+                  }`}
+                >
+                  <button
+                    className="w-full text-left"
+                    onClick={() => setSelectedTagId(tag._id || '')}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium text-gray-800">{tag.name}</span>
+                      <span className="text-xs text-gray-500 uppercase">{tag.type}</span>
+                    </div>
+                    <div className="text-xs text-gray-500 truncate">{tag.description || '无描述'}</div>
+                    <div className="text-sm text-gray-700 truncate">
+                      {tag.type === 'image' || tag.type === 'cda-image'
+                        ? tag.value
+                        : formatTagValue(
+                            tag,
+                            selectedTag && tag._id === selectedTag._id ? currentFormatting : null
+                          )}
+                    </div>
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
         )}
       </div>
-      {selectedTag && (
-        <div className="mt-3 p-3 border rounded space-y-3 bg-gray-50">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-semibold text-gray-800">格式化设置</p>
-              <p className="text-xs text-gray-500">
-                {selectedTag.type === 'image' || selectedTag.type === 'cda-image'
-                  ? '图片标签无需格式化'
-                  : '根据标签类型调整输出格式'}
-              </p>
-            </div>
-            <span className="text-xs text-primary-600">{selectedTag.name}</span>
-          </div>
-          {renderFormattingControls()}
-          <div>
-            <p className="text-xs text-gray-500 mb-1">预览</p>
-            <div className="px-3 py-2 bg-white border rounded text-sm text-gray-800 truncate">
-              {previewValue || '无内容'}
-            </div>
-          </div>
-          <div className="flex justify-end">
+      <div className="flex items-center justify-between gap-2 mt-3">
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => setShowQuickAddMenu(!showQuickAddMenu)}
+            className="inline-flex items-center space-x-2 px-3 py-2 border rounded text-sm text-gray-700 hover:bg-gray-50"
+          >
+            <PlusCircle className="w-4 h-4" />
+            <span>快速添加标签</span>
+            <ChevronDown className="w-4 h-4" />
+          </button>
+          {showQuickAddMenu && (
+            <>
+              <div
+                className="fixed inset-0 z-[45]"
+                onClick={() => setShowQuickAddMenu(false)}
+              />
+              <div className="absolute bottom-full left-0 mb-2 w-48 bg-white border rounded-lg shadow-lg z-[60]">
+                <div className="py-1">
+                  {availableTagTypes.map((tagType) => (
+                    <button
+                      key={tagType.value}
+                      type="button"
+                      onClick={() => handleQuickAddClick(tagType.value)}
+                      className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                    >
+                      {tagType.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {selectedTag &&
+            !showFormattingView &&
+            selectedTag.type !== 'image' &&
+            selectedTag.type !== 'cda-image' &&
+            (selectedTag.type === 'date' ||
+              selectedTag.type === 'datetime' ||
+              selectedTag.type === 'number' ||
+              selectedTag.type === 'boolean') && (
+              <button
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  // 立即设置状态，避免全局监听器关闭弹窗
+                  formattingViewRef.current = true;
+                  setShowFormattingView(true);
+                }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                className="p-2 text-gray-400 hover:text-primary-600 rounded border border-gray-300 hover:border-primary-600 transition-colors"
+                title="格式化设置"
+              >
+                <Settings className="w-4 h-4" />
+              </button>
+            )}
+          {selectedTag && (
             <button
               type="button"
               onClick={() => onApplyTag(selectedTag, currentFormatting)}
               className="px-4 py-2 bg-primary-600 text-white text-sm rounded hover:bg-primary-700"
             >
-              应用到{targetType === 'image' ? '图片' : '文本'}
+              确定
             </button>
-          </div>
+          )}
         </div>
-      )}
-      <div className="flex items-center justify-between mt-3">
-        <button
-          type="button"
-          onClick={onOpenQuickAdd}
-          className="inline-flex items-center space-x-2 px-3 py-2 border rounded text-sm text-gray-700 hover:bg-gray-50"
-        >
-          <PlusCircle className="w-4 h-4" />
-          <span>快速添加标签</span>
-        </button>
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-sm text-gray-500 hover:text-gray-700"
-        >
-          关闭
-        </button>
       </div>
     </div>
   );

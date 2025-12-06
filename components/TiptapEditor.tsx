@@ -262,7 +262,7 @@ const FontSize = TextStyle.extend({
           if (fontSize) {
             return fontSize;
           }
-          // 支持中文字体大小（小三、小四等）
+          // 支持中文字体大小（一号、小一、二号、小二等）
           const classList = Array.from(element.classList);
           for (const className of classList) {
             if (className.includes('font-size-')) {
@@ -277,10 +277,18 @@ const FontSize = TextStyle.extend({
           }
           // 如果是中文字体大小，使用 class；否则使用 style
           const fontSizeMap: Record<string, string> = {
-            '小三': '10.5pt',
+            '一号': '26pt',
+            '小一': '24pt',
+            '二号': '22pt',
+            '小二': '18pt',
+            '三号': '16pt',
+            '小三': '15pt',
+            '四号': '14pt',
             '小四': '12pt',
+            '五号': '10.5pt',
             '小五': '9pt',
-            '小六': '7.5pt',
+            '六号': '7.5pt',
+            '小六': '6.5pt',
             '七号': '5.5pt',
             '八号': '5pt',
           };
@@ -2539,7 +2547,7 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
               className="hidden absolute top-full left-0 mt-1 bg-white border rounded-lg shadow-lg p-2 z-50 min-w-[120px]"
               onClick={(e) => e.stopPropagation()}
             >
-              {['小三', '小四', '小五', '小六', '七号', '八号', '12pt', '14pt', '16pt', '18pt', '20pt', '24pt'].map((size) => (
+              {['一号', '小一', '二号', '小二', '三号', '小三', '四号', '小四', '五号', '小五', '六号', '小六', '七号', '八号'].map((size) => (
                 <button
                   key={size}
                   type="button"
@@ -3537,15 +3545,32 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
   useEffect(() => {
     const handleClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
+      if (!target) return;
+      
       // 如果点击的是数据来源弹窗内部，不关闭
-      if (target?.closest('.data-source-popover')) {
+      const popover = target.closest('.data-source-popover');
+      if (popover) {
         return;
       }
+      
       // 如果点击的是右键菜单内部，不关闭（菜单容器已经有 stopPropagation，但为了保险起见还是检查）
-      const contextMenuEl = target?.closest('.fixed.bg-white.border.rounded-lg.shadow-lg.py-1');
+      const contextMenuEl = target.closest('.fixed.bg-white.border.rounded-lg.shadow-lg.py-1');
       if (contextMenuEl) {
         return;
       }
+      
+      // 检查是否点击了设置按钮或其内部的 SVG 元素
+      const settingsButton = target.closest('button[title="格式化设置"]');
+      if (settingsButton) {
+        return;
+      }
+      
+      // 检查是否点击了关闭格式化设置的按钮
+      const closeFormattingButton = target.closest('button[title="关闭格式化设置"]');
+      if (closeFormattingButton) {
+        return;
+      }
+      
       // 点击外部，关闭所有菜单
       setContextMenu(null);
       setDataSourceMenu(null);
@@ -3554,7 +3579,7 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
     // 延迟绑定，确保 React 事件处理器先注册
     const timeoutId = setTimeout(() => {
       document.addEventListener('click', handleClick);
-    }, 0);
+    }, 100); // 增加延迟，确保 React 事件处理完成
     return () => {
       clearTimeout(timeoutId);
       document.removeEventListener('click', handleClick);

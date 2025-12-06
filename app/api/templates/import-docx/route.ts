@@ -154,6 +154,33 @@ export async function POST(request: NextRequest) {
     // 使用安全的方法查找图片标签（避免对大字符串使用正则导致堆栈溢出）
     let processedHtml = html || '';
     
+    // 安全地提取 HTML 属性值（不使用正则表达式，避免堆栈溢出）
+    const extractAttribute = (tag: string, attrName: string): string | null => {
+      const lowerTag = tag.toLowerCase();
+      const attrLower = attrName.toLowerCase();
+      const attrIndex = lowerTag.indexOf(attrLower + '=');
+      
+      if (attrIndex === -1) return null;
+      
+      // 找到 = 后的引号开始位置
+      let quoteStart = attrIndex + attrName.length + 1; // 跳过 'attrName='
+      // 跳过可能的空白字符
+      while (quoteStart < tag.length && /\s/.test(tag[quoteStart])) {
+        quoteStart++;
+      }
+      
+      if (quoteStart >= tag.length) return null;
+      
+      const quoteChar = tag[quoteStart]; // 可能是 " 或 '
+      if (quoteChar !== '"' && quoteChar !== "'") return null;
+      
+      // 找到引号结束位置
+      const quoteEnd = tag.indexOf(quoteChar, quoteStart + 1);
+      if (quoteEnd === -1) return null;
+      
+      return tag.substring(quoteStart + 1, quoteEnd);
+    };
+    
     // 使用更安全的方法查找图片标签（分批处理，避免一次性处理整个大字符串）
     const findImageTags = (htmlStr: string): Array<{ full: string; src: string; index: number }> => {
       const results: Array<{ full: string; src: string; index: number }> = [];
@@ -171,12 +198,12 @@ export async function POST(request: NextRequest) {
         
         const imgTag = htmlStr.substring(imgStart, imgEnd);
         
-        // 提取 src 属性（使用简单的字符串查找，避免正则）
-        const srcMatch = imgTag.match(/src\s*=\s*["']([^"']+)["']/i);
-        if (srcMatch && srcMatch[1]) {
+        // 提取 src 属性（使用安全的字符串查找，完全避免正则表达式）
+        const src = extractAttribute(imgTag, 'src');
+        if (src) {
           results.push({
             full: imgTag,
-            src: srcMatch[1],
+            src: src,
             index: imgStart,
           });
         }
@@ -656,17 +683,38 @@ export async function POST(request: NextRequest) {
         
         // 使用简单的字符串操作，避免正则表达式
         if (textOnly.length < 10 * 1024 * 1024) {
-          // 小文件可以使用正则
+          // 小文件也可以使用安全的字符串查找方法
           // 先处理图片，确保图片 URL 被保留
-          textOnly = textOnly
-            .replace(/<img[^>]+src\s*=\s*["']([^"']+)["'][^>]*>/gi, (match, src) => {
-              // 提取 alt 和 title 属性
-              const altMatch = match.match(/alt\s*=\s*["']([^"']*)["']/i);
-              const titleMatch = match.match(/title\s*=\s*["']([^"']*)["']/i);
-              const alt = altMatch ? altMatch[1] : '';
-              const title = titleMatch ? titleMatch[1] : '';
-              return title ? `![${alt}](${src} "${title}")` : `![${alt}](${src})`;
-            })
+          let processedText = textOnly;
+          let imgSearchIndex = 0;
+          
+          // 查找并替换所有图片标签（使用安全的字符串查找）
+          while (true) {
+            const imgStart = processedText.toLowerCase().indexOf('<img', imgSearchIndex);
+            if (imgStart === -1) break;
+            
+            const imgEnd = processedText.indexOf('>', imgStart);
+            if (imgEnd === -1) break;
+            
+            const imgTag = processedText.substring(imgStart, imgEnd + 1);
+            
+            // 提取 src、alt 和 title 属性（使用安全的字符串查找）
+            const src = extractAttribute(imgTag, 'src');
+            if (src) {
+              const alt = extractAttribute(imgTag, 'alt') || '';
+              const title = extractAttribute(imgTag, 'title') || '';
+              const markdownImg = title ? `![${alt}](${src} "${title}")` : `![${alt}](${src})`;
+              
+              processedText = processedText.substring(0, imgStart) + 
+                            markdownImg + 
+                            processedText.substring(imgEnd + 1);
+              imgSearchIndex = imgStart + markdownImg.length;
+            } else {
+              imgSearchIndex = imgEnd + 1;
+            }
+          }
+          
+          textOnly = processedText
             .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
             .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
             .replace(/<table[\s\S]*?<\/table>/gi, '\n[表格]\n')
@@ -694,14 +742,11 @@ export async function POST(request: NextRequest) {
             
             const imgTag = processedHtml.substring(imgStart, imgEnd + 1);
             
-            // 提取 src 属性
-            const srcMatch = imgTag.match(/src\s*=\s*["']([^"']+)["']/i);
-            if (srcMatch && srcMatch[1]) {
-              const src = srcMatch[1];
-              const altMatch = imgTag.match(/alt\s*=\s*["']([^"']*)["']/i);
-              const titleMatch = imgTag.match(/title\s*=\s*["']([^"']*)["']/i);
-              const alt = altMatch ? altMatch[1] : '';
-              const title = titleMatch ? titleMatch[1] : '';
+            // 提取 src、alt 和 title 属性（使用安全的字符串查找，避免正则表达式）
+            const src = extractAttribute(imgTag, 'src');
+            if (src) {
+              const alt = extractAttribute(imgTag, 'alt') || '';
+              const title = extractAttribute(imgTag, 'title') || '';
               
               const markdownImg = title ? `![${alt}](${src} "${title}")` : `![${alt}](${src})`;
               processedHtml = processedHtml.substring(0, imgStart) + 
