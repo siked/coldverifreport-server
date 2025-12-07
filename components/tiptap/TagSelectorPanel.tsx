@@ -5,7 +5,8 @@ import type { TemplateTag } from '../TemplateTagList';
 export type TagFormattingOption =
   | { type: 'date' | 'datetime'; pattern: string }
   | { type: 'number'; decimals: number }
-  | { type: 'boolean'; trueText: string; falseText: string };
+  | { type: 'boolean'; trueText: string; falseText: string }
+  | { type: 'location'; prefix?: string; suffix?: string; outputCount?: boolean };
 
 interface TagSelectorPanelProps {
   position: { left: number; top: number };
@@ -44,6 +45,9 @@ export default function TagSelectorPanel({
   const [decimalPlaces, setDecimalPlaces] = useState(1);
   const [trueText, setTrueText] = useState(DEFAULT_BOOLEAN_TRUE);
   const [falseText, setFalseText] = useState(DEFAULT_BOOLEAN_FALSE);
+  const [locationPrefix, setLocationPrefix] = useState('');
+  const [locationSuffix, setLocationSuffix] = useState('');
+  const [outputCount, setOutputCount] = useState(false);
   const [showQuickAddMenu, setShowQuickAddMenu] = useState(false);
   const [showFormattingView, setShowFormattingView] = useState(false);
   const formattingViewRef = useRef(false);
@@ -82,6 +86,10 @@ export default function TagSelectorPanel({
       } else if (fmt.type === 'boolean') {
         setTrueText(fmt.trueText);
         setFalseText(fmt.falseText);
+      } else if (fmt.type === 'location') {
+        setLocationPrefix(fmt.prefix || '');
+        setLocationSuffix(fmt.suffix || '');
+        setOutputCount(fmt.outputCount || false);
       }
       return;
     }
@@ -94,6 +102,10 @@ export default function TagSelectorPanel({
     } else if (selectedTag.type === 'boolean') {
       setTrueText(DEFAULT_BOOLEAN_TRUE);
       setFalseText(DEFAULT_BOOLEAN_FALSE);
+    } else if (selectedTag.type === 'location') {
+      setLocationPrefix('');
+      setLocationSuffix('');
+      setOutputCount(false);
     }
   }, [existingSource, selectedTag]);
 
@@ -108,8 +120,21 @@ export default function TagSelectorPanel({
     if (selectedTag.type === 'boolean') {
       return { type: 'boolean', trueText, falseText };
     }
+    if (selectedTag.type === 'location') {
+      if (outputCount) {
+        return {
+          type: 'location',
+          outputCount: true,
+        };
+      }
+      return {
+        type: 'location',
+        prefix: locationPrefix || undefined,
+        suffix: locationSuffix || undefined,
+      };
+    }
     return null;
-  }, [decimalPlaces, falseText, selectedTag, timeFormat, trueText]);
+  }, [decimalPlaces, falseText, selectedTag, timeFormat, trueText, locationPrefix, locationSuffix, outputCount]);
 
   const previewValue = selectedTag ? formatTagValue(selectedTag, currentFormatting) : '';
 
@@ -196,6 +221,50 @@ export default function TagSelectorPanel({
               placeholder="例如：否 / No"
             />
           </div>
+        </div>
+      );
+    }
+    if (selectedTag.type === 'location') {
+      return (
+        <div className="space-y-3">
+          <div className="flex items-center space-x-2">
+            <input
+              type="checkbox"
+              id="output-count"
+              checked={outputCount}
+              onChange={(e) => setOutputCount(e.target.checked)}
+              className="rounded"
+            />
+            <label htmlFor="output-count" className="text-xs text-gray-600 cursor-pointer">
+              输出数量（统计标签的数量）
+            </label>
+          </div>
+          {!outputCount && (
+            <>
+              <div className="space-y-2">
+                <label className="text-xs text-gray-600">前缀</label>
+                <input
+                  type="text"
+                  value={locationPrefix}
+                  onChange={(e) => setLocationPrefix(e.target.value)}
+                  className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  placeholder="例如：P（输出 P001、P002）"
+                />
+                <p className="text-xs text-gray-500">给每一个编号添加前缀</p>
+              </div>
+              <div className="space-y-2">
+                <label className="text-xs text-gray-600">后缀</label>
+                <input
+                  type="text"
+                  value={locationSuffix}
+                  onChange={(e) => setLocationSuffix(e.target.value)}
+                  className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  placeholder="例如：-A（输出 001-A、002-A）"
+                />
+                <p className="text-xs text-gray-500">给每一个编号添加后缀</p>
+              </div>
+            </>
+          )}
         </div>
       );
     }
@@ -335,7 +404,8 @@ export default function TagSelectorPanel({
             (selectedTag.type === 'date' ||
               selectedTag.type === 'datetime' ||
               selectedTag.type === 'number' ||
-              selectedTag.type === 'boolean') && (
+              selectedTag.type === 'boolean' ||
+              selectedTag.type === 'location') && (
               <button
                 type="button"
                 onMouseDown={(e) => {

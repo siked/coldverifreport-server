@@ -996,6 +996,7 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
   const [quickTagModal, setQuickTagModal] = useState<{
     type: TemplateTag['type'];
     initialValue: string;
+    dataSourceMenu: DataSourceMenuState;
   } | null>(null);
   const [apiForm, setApiForm] = useState<ApiFormState>({
     name: '',
@@ -2002,12 +2003,54 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
 
   const handleQuickTagSave = useCallback(
     (tag: TemplateTag) => {
+      if (!quickTagModal) return;
       const nextTag = { ...tag, _id: tag._id || generateTempId() };
       onChangeTags([...tags, nextTag]);
+      const savedDataSourceMenu = quickTagModal.dataSourceMenu;
       setQuickTagModal(null);
-      setTimeout(() => handleApplyTag(nextTag), 0);
+      
+      // 使用保存的 dataSourceMenu 来应用标签
+      setTimeout(() => {
+        if (!editor) return;
+        
+        if (savedDataSourceMenu.targetType === 'text' && savedDataSourceMenu.range) {
+          const textValue = formatTagValue(nextTag, null);
+          const payload: TagDataSource = {
+            type: 'tag',
+            tagId: nextTag._id || generateTempId(),
+            tagName: nextTag.name,
+            tagType: nextTag.type,
+            value: textValue,
+            formatting: null,
+          };
+          applyDataSourceToText(savedDataSourceMenu.range, payload, textValue);
+        } else if (
+          savedDataSourceMenu.targetType === 'image' &&
+          typeof savedDataSourceMenu.imagePos === 'number'
+        ) {
+          if (!IMAGE_DATA_SOURCE_TYPES.includes(nextTag.type)) {
+            alert('请选择图片或 CDA 图片类型的标签');
+            return;
+          }
+          if (!nextTag.value) {
+            alert('该标签暂无图片，请先在右侧标签列表中上传图片');
+            return;
+          }
+          const payload: TagDataSource = {
+            type: 'tag',
+            tagId: nextTag._id || generateTempId(),
+            tagName: nextTag.name,
+            tagType: nextTag.type,
+            value: nextTag.value,
+            formatting: null,
+          };
+          applyDataSourceToImage(savedDataSourceMenu.imagePos, payload, nextTag.value);
+        }
+        setDataSourceMenu(null);
+        setActiveDataSourcePanel(null);
+      }, 0);
     },
-    [handleApplyTag, onChangeTags, tags]
+    [quickTagModal, onChangeTags, tags, editor, formatTagValue, applyDataSourceToText, applyDataSourceToImage]
   );
 
   const openQuickTagModal = useCallback(() => {
@@ -2026,6 +2069,7 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
     setQuickTagModal({
       type: dataSourceMenu.targetType === 'image' ? 'image' : 'text',
       initialValue,
+      dataSourceMenu: { ...dataSourceMenu }, // 保存 dataSourceMenu 的副本
     });
   }, [dataSourceMenu, editor]);
 
@@ -2981,8 +3025,31 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
     };
   }, [editor]);
 
-  const handleReplaceImage = useCallback(async () => {
-    if (!editor || !selectedImage) return;
+  // 更新图片尺寸
+  const updateImageSize = useCallback((pos: number, width: number | null, height: number | null) => {
+    if (!editor) return;
+
+    editor
+      .chain()
+      .focus()
+      .command(({ tr, state }) => {
+        const node = state.doc.nodeAt(pos);
+        if (node && node.type.name === 'image') {
+          tr.setNodeMarkup(pos, undefined, {
+            ...node.attrs,
+            width: width ? `${width}px` : null,
+            height: height ? `${height}px` : null,
+          });
+          return true;
+        }
+        return false;
+      })
+      .run();
+  }, [editor]);
+
+  // 通过 imagePos 替换图片
+  const handleReplaceImageByPos = useCallback(async (imagePos: number) => {
+    if (!editor || imagePos < 0) return;
 
     const input = document.createElement('input');
     input.type = 'file';
@@ -3065,13 +3132,14 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
         const imageUrl = data.url;
 
         // 替换图片
+        updateImageSize(imagePos, null, null);
         editor
           .chain()
           .focus()
           .command(({ tr, state }) => {
-            const node = state.doc.nodeAt(selectedImage.pos);
+            const node = state.doc.nodeAt(imagePos);
             if (node && node.type.name === 'image') {
-              tr.setNodeMarkup(selectedImage.pos, undefined, {
+              tr.setNodeMarkup(imagePos, undefined, {
                 ...node.attrs,
                 src: imageUrl,
               });
@@ -3082,6 +3150,8 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
           .run();
 
         setSelectedImage(null);
+        setDataSourceMenu(null);
+        setActiveDataSourcePanel(null);
       } catch (err: any) {
         console.error('图片替换失败:', err);
         alert(err.message || '图片替换失败，请重试');
@@ -3092,29 +3162,12 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
       }
     };
     input.click();
-  }, [editor, selectedImage]);
+  }, [editor, updateImageSize]);
 
-  // 更新图片尺寸
-  const updateImageSize = useCallback((pos: number, width: number | null, height: number | null) => {
-    if (!editor) return;
-
-    editor
-      .chain()
-      .focus()
-      .command(({ tr, state }) => {
-        const node = state.doc.nodeAt(pos);
-        if (node && node.type.name === 'image') {
-          tr.setNodeMarkup(pos, undefined, {
-            ...node.attrs,
-            width: width ? `${width}px` : null,
-            height: height ? `${height}px` : null,
-          });
-          return true;
-        }
-        return false;
-      })
-      .run();
-  }, [editor]);
+  const handleReplaceImage = useCallback(async () => {
+    if (!editor || !selectedImage) return;
+    await handleReplaceImageByPos(selectedImage.pos);
+  }, [editor, selectedImage, handleReplaceImageByPos]);
 
   const handleRemoveImage = useCallback((imagePos?: number) => {
     if (!editor) return;
@@ -3149,7 +3202,7 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
       const imageElement = target.closest('img');
       if (imageElement) {
         event.preventDefault();
-        setDataSourceMenu(null);
+        setContextMenu(null);
         setActiveDataSourcePanel(null);
         let imagePos = -1;
         editor.state.doc.descendants((node, pos) => {
@@ -3160,10 +3213,13 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
           return true;
         });
         if (imagePos >= 0) {
-          setContextMenu({
+          const existing = getDataSourceForImage(imagePos);
+          setDataSourceMenu({
             x: event.clientX,
             y: event.clientY,
+            targetType: 'image',
             imagePos,
+            existingSource: existing,
           });
         }
         return;
@@ -3745,7 +3801,7 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
           </p>
         </div>
       )}
-      {contextMenu && (
+      {contextMenu && contextMenu.isTable && (
         <div
           className="fixed bg-white border rounded-lg shadow-lg py-1 z-50 min-w-[160px]"
           style={{
@@ -3754,280 +3810,90 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
           }}
           onClick={(e) => e.stopPropagation()}
         >
-          {contextMenu.isTable ? (
-            <>
-              <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 border-b">
-                列操作
-              </div>
-              <button
-                onClick={() => {
-                  editor.chain().focus().addColumnBefore().run();
-                  setContextMenu(null);
-                }}
-                disabled={!editor.can().addColumnBefore()}
-                className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
-              >
-                <Plus className="w-4 h-4" />
-                <span>在左侧添加列</span>
-              </button>
-              <button
-                onClick={() => {
-                  editor.chain().focus().addColumnAfter().run();
-                  setContextMenu(null);
-                }}
-                disabled={!editor.can().addColumnAfter()}
-                className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
-              >
-                <Plus className="w-4 h-4" />
-                <span>在右侧添加列</span>
-              </button>
-              <button
-                onClick={() => {
-                  editor.chain().focus().deleteColumn().run();
-                  setContextMenu(null);
-                }}
-                disabled={!editor.can().deleteColumn()}
-                className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
-              >
-                <Columns className="w-4 h-4" />
-                <span>删除列</span>
-              </button>
-              <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 border-t border-b mt-1">
-                行操作
-              </div>
-              <button
-                onClick={() => {
-                  editor.chain().focus().addRowBefore().run();
-                  setContextMenu(null);
-                }}
-                disabled={!editor.can().addRowBefore()}
-                className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
-              >
-                <Plus className="w-4 h-4" />
-                <span>在上方添加行</span>
-              </button>
-              <button
-                onClick={() => {
-                  editor.chain().focus().addRowAfter().run();
-                  setContextMenu(null);
-                }}
-                disabled={!editor.can().addRowAfter()}
-                className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
-              >
-                <Plus className="w-4 h-4" />
-                <span>在下方添加行</span>
-              </button>
-              <button
-                onClick={() => {
-                  editor.chain().focus().deleteRow().run();
-                  setContextMenu(null);
-                }}
-                disabled={!editor.can().deleteRow()}
-                className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
-              >
-                <Rows className="w-4 h-4" />
-                <span>删除行</span>
-              </button>
-              <div className="border-t mt-1" />
-              <button
-                onClick={() => {
-                  editor.chain().focus().deleteTable().run();
-                  setContextMenu(null);
-                }}
-                disabled={!editor.can().deleteTable()}
-                className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
-              >
-                <Trash2 className="w-4 h-4" />
-                <span>删除表格</span>
-              </button>
-            </>
-          ) : (
-            <>
-              {contextMenu.imagePos !== undefined && (
-                <>
-                  <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 border-b">
-                    数据来源
-                  </div>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      e.preventDefault();
-                      const existing = getDataSourceForImage(contextMenu.imagePos!);
-                      // 从右键菜单触发时，不设置 activeDataSourcePanel，显示选择菜单
-                      setDataSourceMenu({
-                        x: contextMenu.x,
-                        y: contextMenu.y,
-                        targetType: 'image',
-                        imagePos: contextMenu.imagePos!,
-                        existingSource: existing,
-                      });
-                      setActiveDataSourcePanel(null); // 不直接打开面板，显示选择菜单
-                      // 延迟关闭右键菜单，确保数据来源菜单先渲染
-                      setTimeout(() => {
-                        setContextMenu(null);
-                      }, 50);
-                    }}
-                    className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center space-x-2"
-                  >
-                    <TagIcon className="w-4 h-4" />
-                    <span>标签值</span>
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      e.preventDefault();
-                      const existing = getDataSourceForImage(contextMenu.imagePos!);
-                      hydrateApiForm(existing);
-                      // 从右键菜单触发时，直接打开对应的面板
-                      setDataSourceMenu({
-                        x: contextMenu.x,
-                        y: contextMenu.y,
-                        targetType: 'image',
-                        imagePos: contextMenu.imagePos!,
-                        existingSource: existing,
-                      });
-                      setActiveDataSourcePanel('api');
-                      // 延迟关闭右键菜单，确保数据来源菜单先渲染
-                      setTimeout(() => {
-                        setContextMenu(null);
-                      }, 50);
-                    }}
-                    className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center space-x-2 border-b"
-                  >
-                    <Database className="w-4 h-4" />
-                    <span>接口数据</span>
-                  </button>
-                </>
-              )}
-              <button
-                onClick={() => {
-                  if (contextMenu.imagePos !== undefined && contextMenu.imagePos >= 0) {
-                    const input = document.createElement('input');
-                    input.type = 'file';
-                    input.accept = 'image/*';
-                    input.onchange = async (e) => {
-                      const file = (e.target as HTMLInputElement).files?.[0];
-                      if (!file) return;
-
-                      const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp'];
-                      if (!allowedTypes.includes(file.type)) {
-                        alert('不支持的图片格式，仅支持 JPEG、PNG、GIF、WebP');
-                        return;
-                      }
-
-                      const maxSize = 10 * 1024 * 1024;
-                      if (file.size > maxSize) {
-                        alert('图片大小不能超过 10MB');
-                        return;
-                      }
-
-                      setIsUploading(true);
-                      setUploadProgress(0);
-                      try {
-                        // 压缩图片
-                        const options = {
-                          maxSizeMB: 0.5, // 500KB
-                          maxWidthOrHeight: 1920,
-                          useWebWorker: true,
-                          fileType: file.type,
-                        };
-                        
-                        const compressedFile = await imageCompression(file, options);
-                        console.log(`图片压缩: ${(file.size / 1024).toFixed(2)} KB -> ${(compressedFile.size / 1024).toFixed(2)} KB`);
-
-                        const formData = new FormData();
-                        formData.append('file', compressedFile, file.name);
-
-                        // 使用 XMLHttpRequest 来获取上传进度
-                        const xhr = new XMLHttpRequest();
-                        
-                        const promise = new Promise<{ url: string }>((resolve, reject) => {
-                          xhr.upload.addEventListener('progress', (e) => {
-                            if (e.lengthComputable) {
-                              const percentComplete = Math.round((e.loaded / e.total) * 100);
-                              setUploadProgress(percentComplete);
-                            }
-                          });
-                          
-                          xhr.addEventListener('load', () => {
-                            if (xhr.status >= 200 && xhr.status < 300) {
-                              try {
-                                const data = JSON.parse(xhr.responseText);
-                                resolve(data);
-                              } catch (err) {
-                                reject(new Error('解析响应失败'));
-                              }
-                            } else {
-                              try {
-                                const data = JSON.parse(xhr.responseText);
-                                reject(new Error(data.error || '上传失败'));
-                              } catch {
-                                reject(new Error(`上传失败: ${xhr.statusText}`));
-                              }
-                            }
-                          });
-                          
-                          xhr.addEventListener('error', () => {
-                            reject(new Error('网络错误'));
-                          });
-                          
-                          xhr.addEventListener('abort', () => {
-                            reject(new Error('上传已取消'));
-                          });
-                        });
-                        
-                        xhr.open('POST', '/api/upload/image');
-                        xhr.send(formData);
-                        
-                        const data = await promise;
-                        setUploadProgress(100);
-                        const imageUrl = data.url;
-
-                        updateImageSize(contextMenu.imagePos!, null, null);
-                        editor
-                          .chain()
-                          .focus()
-                          .command(({ tr, state }) => {
-                            const node = state.doc.nodeAt(contextMenu.imagePos!);
-                            if (node && node.type.name === 'image') {
-                              tr.setNodeMarkup(contextMenu.imagePos!, undefined, {
-                                ...node.attrs,
-                                src: imageUrl,
-                              });
-                              return true;
-                            }
-                            return false;
-                          })
-                          .run();
-
-                        setContextMenu(null);
-                      } catch (err: any) {
-                        console.error('图片替换失败:', err);
-                        alert(err.message || '图片替换失败，请重试');
-                      } finally {
-                        setIsUploading(false);
-                        setTimeout(() => setUploadProgress(0), 500);
-                        input.value = '';
-                      }
-                    };
-                    input.click();
-                  }
-                }}
-                disabled={isUploading}
-                className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 flex items-center space-x-2"
-              >
-                <RefreshCw className="w-4 h-4" />
-                <span>更换图片</span>
-              </button>
-              <button
-                onClick={() => handleRemoveImage(contextMenu.imagePos)}
-                className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center space-x-2"
-              >
-                <X className="w-4 h-4" />
-                <span>删除图片</span>
-              </button>
-            </>
-          )}
+          <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 border-b">
+            列操作
+          </div>
+          <button
+            onClick={() => {
+              editor?.chain().focus().addColumnBefore().run();
+              setContextMenu(null);
+            }}
+            disabled={!editor?.can().addColumnBefore()}
+            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+          >
+            <Plus className="w-4 h-4" />
+            <span>在左侧添加列</span>
+          </button>
+          <button
+            onClick={() => {
+              editor?.chain().focus().addColumnAfter().run();
+              setContextMenu(null);
+            }}
+            disabled={!editor?.can().addColumnAfter()}
+            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+          >
+            <Plus className="w-4 h-4" />
+            <span>在右侧添加列</span>
+          </button>
+          <button
+            onClick={() => {
+              editor?.chain().focus().deleteColumn().run();
+              setContextMenu(null);
+            }}
+            disabled={!editor?.can().deleteColumn()}
+            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+          >
+            <Columns className="w-4 h-4" />
+            <span>删除列</span>
+          </button>
+          <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 border-t border-b mt-1">
+            行操作
+          </div>
+          <button
+            onClick={() => {
+              editor?.chain().focus().addRowBefore().run();
+              setContextMenu(null);
+            }}
+            disabled={!editor?.can().addRowBefore()}
+            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+          >
+            <Plus className="w-4 h-4" />
+            <span>在上方添加行</span>
+          </button>
+          <button
+            onClick={() => {
+              editor?.chain().focus().addRowAfter().run();
+              setContextMenu(null);
+            }}
+            disabled={!editor?.can().addRowAfter()}
+            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+          >
+            <Plus className="w-4 h-4" />
+            <span>在下方添加行</span>
+          </button>
+          <button
+            onClick={() => {
+              editor?.chain().focus().deleteRow().run();
+              setContextMenu(null);
+            }}
+            disabled={!editor?.can().deleteRow()}
+            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+          >
+            <Rows className="w-4 h-4" />
+            <span>删除行</span>
+          </button>
+          <div className="border-t mt-1" />
+          <button
+            onClick={() => {
+              editor?.chain().focus().deleteTable().run();
+              setContextMenu(null);
+            }}
+            disabled={!editor?.can().deleteTable()}
+            className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+          >
+            <Trash2 className="w-4 h-4" />
+            <span>删除表格</span>
+          </button>
         </div>
       )}
       {/* 选择菜单：只在没有 activeDataSourcePanel 时显示（例如从右键菜单触发时） */}
@@ -4035,6 +3901,7 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
         <DataSourceMenu
           position={getPopoverPosition(dataSourceMenu.x, dataSourceMenu.y, 220, 160, 10, 10)}
           hasExistingSource={Boolean(dataSourceMenu.existingSource)}
+          targetType={dataSourceMenu.targetType}
           onSelectTag={() => {
             setTagSearch('');
             setActiveDataSourcePanel('tag');
@@ -4047,6 +3914,21 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
             setActiveDataSourcePanel('calculation');
           }}
           onRemove={dataSourceMenu.existingSource ? () => removeDataSourceFromTarget(dataSourceMenu) : undefined}
+          onReplaceImage={
+            dataSourceMenu.targetType === 'image' && typeof dataSourceMenu.imagePos === 'number'
+              ? () => handleReplaceImageByPos(dataSourceMenu.imagePos!)
+              : undefined
+          }
+          onRemoveImage={
+            dataSourceMenu.targetType === 'image' && typeof dataSourceMenu.imagePos === 'number'
+              ? () => {
+                  handleRemoveImage(dataSourceMenu.imagePos);
+                  setDataSourceMenu(null);
+                  setActiveDataSourcePanel(null);
+                }
+              : undefined
+          }
+          isUploading={isUploading}
         />
       )}
       {dataSourceMenu && activeDataSourcePanel === 'tag' && (
