@@ -346,7 +346,13 @@ type ApiDataSource = {
   value?: string;
 };
 
-type DataSourcePayload = TagDataSource | ApiDataSource | CalculationDataSource;
+type CurveChartDataSource = {
+  type: 'curveChart';
+  config: import('./tiptap/CurveChartConfigPanel').CurveChartConfig;
+  imageUrl?: string;
+};
+
+type DataSourcePayload = TagDataSource | ApiDataSource | CalculationDataSource | CurveChartDataSource;
 
 interface DataSourceMenuState {
   x: number;
@@ -506,6 +512,7 @@ const DATA_SOURCE_STYLES = `
 const stringifyDataSource = (payload: DataSourcePayload) =>
   encodeURIComponent(JSON.stringify(payload));
 const parseDataSource = (value?: string | null): DataSourcePayload | null => {
+  // 支持 curveChart 类型
   if (!value) return null;
   const tryParse = (raw: string) => {
     try {
@@ -522,7 +529,7 @@ const parseDataSource = (value?: string | null): DataSourcePayload | null => {
   }
 };
 
-const formatTooltip = (payload: DataSourcePayload) => {
+const formatTooltip = (payload: DataSourcePayload): string => {
   if (payload.type === 'tag') {
     return `标签：${payload.tagName} (${payload.tagType})`;
   }
@@ -539,6 +546,9 @@ const formatTooltip = (payload: DataSourcePayload) => {
       min: '取最小值',
     };
     return `运算：${calcLabels[payload.calculationType]} (${payload.tagName1}${payload.tagName2 ? `, ${payload.tagName2}` : ''})`;
+  }
+  if (payload.type === 'curveChart') {
+    return `曲线图：${payload.config.dataType === 'temperature' ? '温度' : '湿度'}`;
   }
   return `接口：${payload.name || payload.url}`;
 };
@@ -691,6 +701,7 @@ import DataSourceMenu from './tiptap/DataSourceMenu';
 import OutlineSidebar from './tiptap/OutlineSidebar';
 import TagSelectorPanel, { TagFormattingOption } from './tiptap/TagSelectorPanel';
 import CalculationPanel, { CalculationDataSource } from './tiptap/CalculationPanel';
+import CurveChartConfigPanel, { CurveChartConfig } from './tiptap/CurveChartConfigPanel';
 import TaskSelectorModal from './tiptap/TaskSelectorModal';
 import type { ApiFormState, ApiTestResult, HeadingItem } from './tiptap/types';
 
@@ -1004,7 +1015,8 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
   const [resizingSidebar, setResizingSidebar] = useState(false);
   const sidebarRef = useRef<HTMLDivElement | null>(null);
   const [dataSourceMenu, setDataSourceMenu] = useState<DataSourceMenuState | null>(null);
-  const [activeDataSourcePanel, setActiveDataSourcePanel] = useState<'tag' | 'api' | 'calculation' | null>(null);
+  const [activeDataSourcePanel, setActiveDataSourcePanel] = useState<'tag' | 'api' | 'calculation' | 'curveChart' | null>(null);
+  const [curveChartConfig, setCurveChartConfig] = useState<CurveChartConfig | null>(null);
   const [tagSearch, setTagSearch] = useState('');
   const [quickTagModal, setQuickTagModal] = useState<{
     type: TemplateTag['type'];
@@ -1873,25 +1885,143 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
 
   const applyDataSourceToImage = useCallback(
     (pos: number, payload: DataSourcePayload, nextSrc: string) => {
-      if (!editor) return;
-      editor
-        .chain()
-        .focus()
-        .command(({ tr, state }) => {
-          const node = state.doc.nodeAt(pos);
-          if (node && node.type.name === 'image') {
-            tr.setNodeMarkup(pos, undefined, {
-              ...node.attrs,
-              src: nextSrc || node.attrs.src,
-              dataSource: stringifyDataSource(payload),
-              dataSourceType: payload.type,
-              tooltip: formatTooltip(payload),
-            });
-            return true;
+      if (!editor) {
+        console.error('applyDataSourceToImage: editor is null');
+        return;
+      }
+      
+      console.log('applyDataSourceToImage called:', { pos, nextSrc, payloadType: payload.type });
+      
+      // 先尝试通过位置查找节点
+      let node = editor.state.doc.nodeAt(pos);
+      let actualPos = pos;
+      const oldSrc = node?.attrs?.src;
+      const oldDataSource = node?.attrs?.dataSource;
+      
+      // 如果通过位置找不到，尝试遍历所有图片节点
+      if (!node || node.type.name !== 'image') {
+        console.log('Node not found at pos, searching all image nodes...');
+        let found = false;
+        editor.state.doc.descendants((n, p) => {
+          if (n.type.name === 'image') {
+            // 优先通过位置匹配
+            if (p === pos) {
+              node = n;
+              actualPos = p;
+              found = true;
+              return false; // 停止遍历
+            }
+            // 如果位置不匹配，尝试通过旧的 src 或 dataSource 匹配
+            if (oldSrc && n.attrs.src === oldSrc) {
+              node = n;
+              actualPos = p;
+              found = true;
+              return false;
+            }
+            if (oldDataSource && n.attrs.dataSource === oldDataSource) {
+              node = n;
+              actualPos = p;
+              found = true;
+              return false;
+            }
           }
-          return false;
-        })
-        .run();
+          return true;
+        });
+        
+        if (!found) {
+          console.error('applyDataSourceToImage: Image node not found at pos', pos, 'oldSrc:', oldSrc);
+          return;
+        }
+      }
+      
+      if (!node || node.type.name !== 'image') {
+        console.error('applyDataSourceToImage: Image node not found at pos', pos);
+        return;
+      }
+      
+      console.log('Found image node at pos:', actualPos, 'old src:', node.attrs.src);
+      
+      // 确保 oldSrc 有值（如果之前为 undefined，现在 node 已确认存在）
+      const finalOldSrc = oldSrc || node.attrs.src;
+      
+      // 创建新的属性对象
+      const newAttrs = {
+        ...node.attrs,
+        src: nextSrc || node.attrs.src,
+        dataSource: stringifyDataSource(payload),
+        dataSourceType: payload.type,
+        tooltip: formatTooltip(payload),
+      };
+      
+      // 直接使用事务更新节点
+      const tr = editor.state.tr;
+      tr.setNodeMarkup(actualPos, undefined, newAttrs);
+      editor.view.dispatch(tr);
+      
+      console.log('Image node updated, new src:', newAttrs.src, 'old src:', finalOldSrc);
+      
+      // 立即查找并更新 DOM 元素（在事务应用后）
+      setTimeout(() => {
+        if (!editor) return;
+        
+        const { view } = editor;
+        const editorElement = view.dom;
+        const allImages = editorElement.querySelectorAll('img');
+        let imgElement: HTMLImageElement | null = null;
+        
+        // 通过旧的 src 查找图片元素
+        allImages.forEach((img) => {
+          const imgSrc = img.getAttribute('src');
+          // 精确匹配或部分匹配（处理 URL 编码等情况）
+          if (imgSrc === finalOldSrc || (finalOldSrc && imgSrc?.includes(finalOldSrc.split('/').pop() || ''))) {
+            imgElement = img as HTMLImageElement;
+            return;
+          }
+        });
+        
+        if (imgElement) {
+          console.log('Found DOM img element by old src, updating to:', nextSrc);
+          // 强制更新 src，添加时间戳防止缓存
+          const urlWithTimestamp = nextSrc + (nextSrc.includes('?') ? '&' : '?') + '_t=' + Date.now();
+          
+          // 直接更新 src
+          imgElement.src = urlWithTimestamp;
+          
+          // 如果时间戳版本加载失败，回退到原始 URL
+          imgElement.onerror = () => {
+            console.warn('Image with timestamp failed, falling back to original URL');
+            if (imgElement) {
+              imgElement.src = nextSrc;
+            }
+          };
+          
+          // 图片加载成功后，确保视图同步
+          imgElement.onload = () => {
+            console.log('Image loaded successfully');
+          };
+        } else {
+          console.warn('DOM img element not found by old src:', finalOldSrc, 'trying by position');
+          // 如果找不到，尝试通过位置查找
+          try {
+            const domAtPos = view.domAtPos(actualPos);
+            if (domAtPos && domAtPos.node && domAtPos.node.nodeType === 1) {
+              const element = domAtPos.node as HTMLElement;
+              if (element.tagName === 'IMG') {
+                imgElement = element as HTMLImageElement;
+              } else {
+                imgElement = element.querySelector('img');
+              }
+              if (imgElement) {
+                console.log('Found DOM img element by position, updating src');
+                const urlWithTimestamp = nextSrc + (nextSrc.includes('?') ? '&' : '?') + '_t=' + Date.now();
+                imgElement.src = urlWithTimestamp;
+              }
+            }
+          } catch (e) {
+            console.error('Error finding DOM element by position:', e);
+          }
+        }
+      }, 0);
     },
     [editor]
   );
@@ -3384,16 +3514,19 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
           range,
           existingSource: existing,
         });
-        // 根据现有数据来源类型直接打开对应面板
-        if (existing && existing.type === 'api') {
-          hydrateApiForm(existing);
-          setActiveDataSourcePanel('api');
-        } else if (existing && existing.type === 'calculation') {
-          setActiveDataSourcePanel('calculation');
-        } else {
-          // 如果有数据来源但类型不是 api 或 calculation，则打开标签面板；如果没有数据来源，也打开标签面板
-          setActiveDataSourcePanel('tag');
-        }
+          // 根据现有数据来源类型直接打开对应面板
+          if (existing && existing.type === 'api') {
+            hydrateApiForm(existing);
+            setActiveDataSourcePanel('api');
+          } else if (existing && existing.type === 'calculation') {
+            setActiveDataSourcePanel('calculation');
+          } else if (existing && existing.type === 'curveChart') {
+            setCurveChartConfig(existing.config);
+            setActiveDataSourcePanel('curveChart');
+          } else {
+            // 如果有数据来源但类型不是 api、calculation 或 curveChart，则打开标签面板；如果没有数据来源，也打开标签面板
+            setActiveDataSourcePanel('tag');
+          }
       } else if (elementType === 'image') {
         let imagePos = -1;
         editor.state.doc.descendants((node, pos) => {
@@ -3421,8 +3554,11 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
             setActiveDataSourcePanel('api');
           } else if (existing && existing.type === 'calculation') {
             setActiveDataSourcePanel('calculation');
+          } else if (existing && existing.type === 'curveChart') {
+            setCurveChartConfig(existing.config);
+            setActiveDataSourcePanel('curveChart');
           } else {
-            // 如果有数据来源但类型不是 api 或 calculation，则打开标签面板；如果没有数据来源，也打开标签面板
+            // 如果有数据来源但类型不是 api、calculation 或 curveChart，则打开标签面板；如果没有数据来源，也打开标签面板
             setActiveDataSourcePanel('tag');
           }
         }
@@ -3629,6 +3765,38 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
         return;
       }
       
+      // 如果点击的是曲线图线条编辑表单（独立弹窗），不关闭
+      // 检查所有可能的父元素（包括当前元素）
+      let currentElement: HTMLElement | null = target;
+      while (currentElement && currentElement !== document.body) {
+        // 检查 data 属性
+        if (currentElement.hasAttribute('data-curve-chart-line-form') ||
+            currentElement.hasAttribute('data-curve-chart-line-form-content')) {
+          return;
+        }
+        // 检查类名
+        if (currentElement.classList && currentElement.classList.contains('data-source-popover')) {
+          return;
+        }
+        currentElement = currentElement.parentElement;
+      }
+      
+      // 使用 closest 作为备用检查
+      const lineFormElement = target.closest('[data-curve-chart-line-form="true"]') ||
+                              target.closest('[data-curve-chart-line-form-content="true"]') ||
+                              target.closest('.data-source-popover');
+      if (lineFormElement) {
+        return;
+      }
+      
+      // 如果点击的是添加线条按钮、菜单或其父元素，不关闭
+      const addLineElement = target.closest('[data-curve-chart-add-line="true"]') ||
+                            target.closest('[data-curve-chart-add-line-button="true"]') ||
+                            target.closest('[data-curve-chart-add-line-menu="true"]');
+      if (addLineElement) {
+        return;
+      }
+      
       // 如果点击的是右键菜单内部，不关闭（菜单容器已经有 stopPropagation，但为了保险起见还是检查）
       const contextMenuEl = target.closest('.fixed.bg-white.border.rounded-lg.shadow-lg.py-1');
       if (contextMenuEl) {
@@ -3654,11 +3822,11 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
     };
     // 延迟绑定，确保 React 事件处理器先注册
     const timeoutId = setTimeout(() => {
-      document.addEventListener('click', handleClick);
+      document.addEventListener('click', handleClick, true); // 使用 capture 模式，但会在检查中排除弹窗
     }, 100); // 增加延迟，确保 React 事件处理完成
     return () => {
       clearTimeout(timeoutId);
-      document.removeEventListener('click', handleClick);
+      document.removeEventListener('click', handleClick, true);
     };
   }, []);
 
@@ -3753,7 +3921,7 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
   }, [editor, selectedImage, updateImageSize]);
 
   // 处理任务选择
-  const handleTaskSelect = (task: {
+  const handleTaskSelect = async (task: {
     _id: string;
     taskNumber: string;
     taskName: string;
@@ -3762,6 +3930,25 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
   }) => {
     setSelectedTask(task);
     setShowTaskSelector(false);
+    
+    // 加载任务数据到 LokiJS
+    try {
+      const { getAllCachedData } = await import('@/lib/cache');
+      const { loadTaskDataToLoki } = await import('@/lib/lokijs');
+      
+      console.log(`[任务关联] 开始加载任务数据到 LokiJS (任务ID: ${task._id})`);
+      const allData = await getAllCachedData(task._id);
+      
+      if (allData.length > 0) {
+        await loadTaskDataToLoki(task._id, allData);
+        console.log(`[任务关联] 成功加载 ${allData.length} 条数据到 LokiJS`);
+      } else {
+        console.warn(`[任务关联] 任务 ${task._id} 在 IndexedDB 中没有数据`);
+      }
+    } catch (error) {
+      console.error('[任务关联] 加载数据到 LokiJS 失败:', error);
+    }
+    
     onTaskChange?.(task);
   };
 
@@ -3933,6 +4120,19 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
           onSelectCalculation={() => {
             setActiveDataSourcePanel('calculation');
           }}
+          onSelectCurveChart={
+            dataSourceMenu.targetType === 'image'
+              ? () => {
+                  const existing = dataSourceMenu.existingSource;
+                  if (existing && existing.type === 'curveChart') {
+                    setCurveChartConfig(existing.config);
+                  } else {
+                    setCurveChartConfig(null);
+                  }
+                  setActiveDataSourcePanel('curveChart');
+                }
+              : undefined
+          }
           onRemove={dataSourceMenu.existingSource ? () => removeDataSourceFromTarget(dataSourceMenu) : undefined}
           onReplaceImage={
             dataSourceMenu.targetType === 'image' && typeof dataSourceMenu.imagePos === 'number'
@@ -3998,6 +4198,87 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
           existingSource={
             dataSourceMenu.existingSource?.type === 'calculation' ? dataSourceMenu.existingSource : null
           }
+        />
+      )}
+      {dataSourceMenu && activeDataSourcePanel === 'curveChart' && dataSourceMenu.targetType === 'image' && (
+        <CurveChartConfigPanel
+          position={getPopoverPosition(dataSourceMenu.x, dataSourceMenu.y, 500, 600, 10, 10)}
+          tags={tags}
+          selectedTaskId={selectedTask?._id || null}
+          config={curveChartConfig}
+          onChange={setCurveChartConfig}
+          onApply={async () => {
+            if (!curveChartConfig || !selectedTask || typeof dataSourceMenu.imagePos !== 'number') {
+              alert('请先配置曲线图参数并关联任务');
+              return;
+            }
+            try {
+              setIsUploading(true);
+              setUploadProgress(0);
+              
+              // 调用 API 生成曲线图
+              // 在客户端生成曲线图
+              const { generateCurveChart } = await import('@/lib/generateCurveChart');
+              const imageBlob = await generateCurveChart(
+                selectedTask._id,
+                curveChartConfig,
+                tags
+              );
+
+              // 上传图片到服务器
+              const formData = new FormData();
+              formData.append('file', imageBlob, 'curve-chart.png');
+
+              const response = await fetch('/api/upload/image', {
+                method: 'POST',
+                body: formData,
+              });
+
+              if (!response.ok) {
+                const data = await response.json();
+                throw new Error(data.error || '上传曲线图失败');
+              }
+
+              const data = await response.json();
+              const imageUrl = data.url;
+
+              // 应用曲线图数据来源
+              const payload: CurveChartDataSource = {
+                type: 'curveChart',
+                config: curveChartConfig,
+                imageUrl,
+              };
+
+              // 先应用数据源，然后等待一下确保图片更新
+              console.log('Applying curve chart to image:', {
+                imagePos: dataSourceMenu.imagePos,
+                imageUrl,
+                payload
+              });
+              
+              // 保存 imagePos，因为 applyDataSourceToImage 可能会修改文档
+              const savedImagePos = dataSourceMenu.imagePos;
+              
+              applyDataSourceToImage(savedImagePos, payload, imageUrl);
+              
+              // 使用 setTimeout 确保图片更新完成后再关闭面板
+              setTimeout(() => {
+                setActiveDataSourcePanel(null);
+                setDataSourceMenu(null);
+                setCurveChartConfig(null);
+              }, 300);
+            } catch (err: any) {
+              alert(err.message || '生成曲线图失败');
+            } finally {
+              setIsUploading(false);
+              setTimeout(() => setUploadProgress(0), 500);
+            }
+          }}
+          onClose={() => {
+            setActiveDataSourcePanel(null);
+            setDataSourceMenu(null);
+            setCurveChartConfig(null);
+          }}
         />
       )}
       {quickTagModal && (

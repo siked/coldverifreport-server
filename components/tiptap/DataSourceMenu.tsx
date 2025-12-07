@@ -1,4 +1,4 @@
-import { Database, Tag as TagIcon, Trash2, Calculator, RefreshCw, X } from 'lucide-react';
+import { Database, Tag as TagIcon, Trash2, Calculator, RefreshCw, X, TrendingUp } from 'lucide-react';
 import React from 'react';
 
 interface DataSourceMenuProps {
@@ -8,6 +8,7 @@ interface DataSourceMenuProps {
   onSelectTag: () => void;
   onSelectApi: () => void;
   onSelectCalculation: () => void;
+  onSelectCurveChart?: () => void;
   onRemove?: () => void;
   // 图片相关操作
   onReplaceImage?: () => void;
@@ -22,6 +23,7 @@ export default function DataSourceMenu({
   onSelectTag,
   onSelectApi,
   onSelectCalculation,
+  onSelectCurveChart,
   onRemove,
   onReplaceImage,
   onRemoveImage,
@@ -64,6 +66,18 @@ export default function DataSourceMenu({
         >
           <Calculator className="w-4 h-4" />
           <span>运算类</span>
+        </button>
+      )}
+      {targetType === 'image' && onSelectCurveChart && (
+        <button
+          className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center space-x-2"
+          onClick={(e) => {
+            e.stopPropagation();
+            onSelectCurveChart();
+          }}
+        >
+          <TrendingUp className="w-4 h-4" />
+          <span>曲线图类</span>
         </button>
       )}
       {hasExistingSource && onRemove && (
