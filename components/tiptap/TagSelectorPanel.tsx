@@ -15,7 +15,7 @@ interface TagSelectorPanelProps {
   tagSearch: string;
   onTagSearchChange: (value: string) => void;
   onApplyTag: (tag: TemplateTag, formatting?: TagFormattingOption | null) => void;
-  onOpenQuickAdd: (type: TemplateTag['type']) => void;
+  onOpenQuickAdd: (type?: TemplateTag['type']) => void;
   onClose: () => void;
   formatTagValue: (tag: TemplateTag, formatting?: TagFormattingOption | null) => string;
   existingSource?: {
@@ -158,7 +158,7 @@ export default function TagSelectorPanel({
 
   const handleQuickAddClick = (type: TemplateTag['type']) => {
     setShowQuickAddMenu(false);
-    onOpenQuickAdd(type);
+    onOpenQuickAdd(type); // 传递选择的标签类型
   };
 
   const renderFormattingControls = () => {

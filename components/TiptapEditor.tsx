@@ -618,7 +618,20 @@ const formatTagValue = (tag: TemplateTag, formatting?: TagFormattingOption | nul
   }
 
   if (tag.type === 'location' && Array.isArray(tag.value)) {
-    return tag.value.join('、');
+    // 如果设置了输出数量，返回数组长度
+    if (formatting?.type === 'location' && formatting.outputCount) {
+      return String(tag.value.length);
+    }
+    // 处理前缀和后缀
+    let result = tag.value;
+    if (formatting?.type === 'location') {
+      if (formatting.prefix || formatting.suffix) {
+        result = tag.value.map((item) => {
+          return `${formatting.prefix || ''}${item}${formatting.suffix || ''}`;
+        });
+      }
+    }
+    return result.join('、');
   }
   if (tag.type === 'boolean') {
     return tag.value ? '是' : '否';
@@ -2053,7 +2066,7 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
     [quickTagModal, onChangeTags, tags, editor, formatTagValue, applyDataSourceToText, applyDataSourceToImage]
   );
 
-  const openQuickTagModal = useCallback(() => {
+  const openQuickTagModal = useCallback((selectedType?: TemplateTag['type']) => {
     if (!dataSourceMenu) return;
     let initialValue = '';
     if (dataSourceMenu.targetType === 'text' && dataSourceMenu.range && editor) {
@@ -2066,8 +2079,15 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
       const node = editor.state.doc.nodeAt(dataSourceMenu.imagePos);
       initialValue = node?.attrs.src || '';
     }
+    // 如果传入了选择的类型，使用该类型；否则根据 targetType 推断
+    let type: TemplateTag['type'];
+    if (selectedType) {
+      type = selectedType;
+    } else {
+      type = dataSourceMenu.targetType === 'image' ? 'image' : 'text';
+    }
     setQuickTagModal({
-      type: dataSourceMenu.targetType === 'image' ? 'image' : 'text',
+      type,
       initialValue,
       dataSourceMenu: { ...dataSourceMenu }, // 保存 dataSourceMenu 的副本
     });
@@ -3985,6 +4005,7 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
           isOpen
           defaultType={quickTagModal.type}
           initialValue={quickTagModal.initialValue}
+          targetType={quickTagModal.dataSourceMenu.targetType}
           onClose={() => setQuickTagModal(null)}
           onSave={handleQuickTagSave}
         />
@@ -4162,19 +4183,40 @@ interface QuickTagModalProps {
   isOpen: boolean;
   defaultType: TemplateTag['type'];
   initialValue: string;
+  targetType: 'text' | 'image';
   onClose: () => void;
   onSave: (tag: TemplateTag) => void;
 }
 
-function QuickTagModal({ isOpen, defaultType, initialValue, onClose, onSave }: QuickTagModalProps) {
+function QuickTagModal({ isOpen, defaultType, initialValue, targetType, onClose, onSave }: QuickTagModalProps) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [value, setValue] = useState(initialValue);
+  const [tagType, setTagType] = useState<TemplateTag['type']>(defaultType);
+
+  // 根据 targetType 获取可用的标签类型
+  const availableTagTypes = useMemo(() => {
+    if (targetType === 'image') {
+      return [
+        { value: 'image' as const, label: '图片' },
+        { value: 'cda-image' as const, label: 'CDA 图片' },
+      ];
+    }
+    return [
+      { value: 'text' as const, label: '文本' },
+      { value: 'number' as const, label: '数字' },
+      { value: 'date' as const, label: '日期' },
+      { value: 'datetime' as const, label: '时间' },
+      { value: 'location' as const, label: '布点区域' },
+      { value: 'boolean' as const, label: '布尔' },
+    ];
+  }, [targetType]);
 
   useEffect(() => {
     setName('');
     setDescription('');
     setValue(initialValue);
+    setTagType(defaultType); // 当 defaultType 改变时，更新 tagType
   }, [initialValue, defaultType]);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -4183,12 +4225,59 @@ function QuickTagModal({ isOpen, defaultType, initialValue, onClose, onSave }: Q
       alert('请输入标签名称');
       return;
     }
+    
+    // 根据标签类型封装值
+    let formattedValue: any = value;
+    if (tagType === 'location') {
+      // location 类型需要数组格式
+      if (typeof value === 'string') {
+        const trimmed = value.trim();
+        if (trimmed) {
+          // 尝试解析：支持逗号、分号、换行符分割，也支持范围格式
+          const parts = trimmed
+            .split(/[,;\n]/)
+            .map((part) => part.trim())
+            .filter((part) => part.length > 0);
+          
+          // 如果只有一个值，直接作为数组
+          if (parts.length === 1) {
+            formattedValue = [parts[0]];
+          } else if (parts.length > 1) {
+            // 多个值，直接使用
+            formattedValue = parts;
+          } else {
+            formattedValue = [];
+          }
+        } else {
+          formattedValue = [];
+        }
+      } else if (Array.isArray(value)) {
+        formattedValue = value;
+      } else {
+        formattedValue = [];
+      }
+    } else if (tagType === 'number') {
+      // number 类型转换为数字
+      const num = Number(value);
+      formattedValue = !Number.isNaN(num) ? num : 0;
+    } else if (tagType === 'boolean') {
+      // boolean 类型转换为布尔值
+      if (typeof value === 'string') {
+        formattedValue = value.toLowerCase() === 'true' || value === '1' || value === '是';
+      } else {
+        formattedValue = Boolean(value);
+      }
+    } else {
+      // 其他类型保持字符串
+      formattedValue = typeof value === 'string' ? value : String(value || '');
+    }
+    
     const nextTag: TemplateTag = {
       _id: generateTempId(),
       name: name.trim(),
       description: description.trim(),
-      type: defaultType,
-      value,
+      type: tagType, // 使用选择的标签类型
+      value: formattedValue,
     };
     onSave(nextTag);
   };
@@ -4201,6 +4290,22 @@ function QuickTagModal({ isOpen, defaultType, initialValue, onClose, onSave }: Q
       size="sm"
     >
       <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            标签类型 <span className="text-red-500">*</span>
+          </label>
+          <select
+            value={tagType}
+            onChange={(e) => setTagType(e.target.value as TemplateTag['type'])}
+            className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+          >
+            {availableTagTypes.map((type) => (
+              <option key={type.value} value={type.value}>
+                {type.label}
+              </option>
+            ))}
+          </select>
+        </div>
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
             标签名称 <span className="text-red-500">*</span>
@@ -4225,16 +4330,39 @@ function QuickTagModal({ isOpen, defaultType, initialValue, onClose, onSave }: Q
         </div>
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
-            标签值（{defaultType === 'image' || defaultType === 'cda-image' ? '图片 URL' : '文本'}）
+            标签值（{(() => {
+              if (tagType === 'image' || tagType === 'cda-image') return '图片 URL';
+              if (tagType === 'location') return '布点区域';
+              if (tagType === 'number') return '数字';
+              if (tagType === 'date') return '日期';
+              if (tagType === 'datetime') return '时间';
+              if (tagType === 'boolean') return '布尔值';
+              return '文本';
+            })()}）
           </label>
           <textarea
             value={value}
             onChange={(e) => setValue(e.target.value)}
             className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-            rows={defaultType === 'image' || defaultType === 'cda-image' ? 2 : 3}
+            rows={tagType === 'image' || tagType === 'cda-image' ? 2 : 3}
+            placeholder={
+              tagType === 'location'
+                ? '如 C001、C001-C010，多个值用逗号或换行分隔'
+                : tagType === 'number'
+                ? '请输入数字'
+                : tagType === 'date'
+                ? '格式：YYYY-MM-DD'
+                : tagType === 'datetime'
+                ? '格式：YYYY-MM-DD HH:mm'
+                : tagType === 'boolean'
+                ? 'true/false 或 是/否'
+                : undefined
+            }
           />
           <p className="text-xs text-gray-500 mt-1">
-            将当前选中的内容保存为标签，可在编辑器中反复引用
+            {tagType === 'location'
+              ? '输入布点区域编号，支持单个值（如 C001）或范围（如 C001-C010），多个值用逗号或换行分隔'
+              : '将当前选中的内容保存为标签，可在编辑器中反复引用'}
           </p>
         </div>
         <div className="flex justify-end space-x-3 pt-4 border-t">
