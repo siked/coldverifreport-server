@@ -1,7 +1,19 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Plus, X, Trash2, Calendar, Clock, MapPin, ToggleLeft, ToggleRight, Image as ImageIcon, Upload } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import {
+  Plus,
+  X,
+  Trash2,
+  Calendar,
+  Clock,
+  ToggleLeft,
+  ToggleRight,
+  Upload,
+  Copy,
+  GripVertical,
+  MoreVertical,
+} from 'lucide-react';
 import Modal from './Modal';
 import imageCompression from 'browser-image-compression';
 
@@ -20,9 +32,44 @@ interface TemplateTagListProps {
 }
 
 export default function TemplateTagList({ tags, onChange, templateId }: TemplateTagListProps) {
+  const [tagList, setTagList] = useState<TemplateTag[]>(tags);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingTag, setEditingTag] = useState<TemplateTag | null>(null);
   const [isUploading, setIsUploading] = useState<string | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const [editingNameId, setEditingNameId] = useState<string | null>(null);
+  const [editingNameValue, setEditingNameValue] = useState('');
+  const tagListRef = useRef<TemplateTag[]>(tagList);
+  const [textModeTagId, setTextModeTagId] = useState<string | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState('');
+
+  useEffect(() => {
+    setTagList(tags);
+  }, [tags]);
+
+  useEffect(() => {
+    tagListRef.current = tagList;
+  }, [tagList]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (!openMenuId) return;
+      const wrapper = document.getElementById(`tag-menu-wrapper-${openMenuId}`);
+      if (wrapper && !wrapper.contains(e.target as Node)) {
+        setOpenMenuId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [openMenuId]);
+
+  const syncChange = (next: TemplateTag[]) => {
+    tagListRef.current = next;
+    setTagList(next);
+    onChange(next);
+  };
 
   const handleAddTag = () => {
     setEditingTag({
@@ -41,23 +88,113 @@ export default function TemplateTagList({ tags, onChange, templateId }: Template
 
   const handleSaveTag = (tag: TemplateTag) => {
     const newTags = editingTag?._id
-      ? tags.map((t) => (t._id === editingTag._id ? tag : t))
-      : [...tags, { ...tag, _id: `temp_${Date.now()}` }];
-    onChange(newTags);
+      ? tagList.map((t) => (t._id === editingTag._id ? tag : t))
+      : [...tagList, { ...tag, _id: `temp_${Date.now()}` }];
+    syncChange(newTags);
     setShowAddModal(false);
     setEditingTag(null);
   };
 
   const handleDeleteTag = (tagId: string | undefined) => {
     if (!tagId) return;
-    const newTags = tags.filter((t) => t._id !== tagId);
-    onChange(newTags);
+    const newTags = tagList.filter((t) => t._id !== tagId);
+    syncChange(newTags);
   };
 
   const handleTagValueChange = (tagId: string | undefined, value: any) => {
     if (!tagId) return;
-    const newTags = tags.map((t) => (t._id === tagId ? { ...t, value } : t));
-    onChange(newTags);
+    const newTags = tagList.map((t) => (t._id === tagId ? { ...t, value } : t));
+    syncChange(newTags);
+  };
+
+  const handleCopyTag = (tagId: string | undefined) => {
+    if (!tagId) return;
+    const index = tagList.findIndex((t) => t._id === tagId);
+    if (index === -1) return;
+    const base = tagList[index];
+    const copyName = `${base.name} (复制)`;
+    const copied: TemplateTag = {
+      ...base,
+      _id: `temp_${Date.now()}`,
+      name: copyName,
+    };
+    const next = [...tagList];
+    next.splice(index + 1, 0, copied);
+    syncChange(next);
+  };
+
+  const handleInlineNameSave = (tagId: string | undefined, name: string) => {
+    if (!tagId) return;
+    const trimmed = name.trim();
+    const next = tagList.map((t) => (t._id === tagId ? { ...t, name: trimmed || t.name } : t));
+    syncChange(next);
+    setEditingNameId(null);
+    setEditingNameValue('');
+  };
+
+  const handleDragStart = (tagId: string | undefined) => {
+    if (!tagId) return;
+    setDraggingId(tagId);
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>, overId: string | undefined) => {
+    e.preventDefault();
+    if (!draggingId || !overId || draggingId === overId) return;
+    setDragOverId(overId);
+  };
+
+  const handleDrop = (overId?: string | null) => {
+    if (!draggingId) return;
+    const targetId = overId || dragOverId;
+    if (!targetId || targetId === draggingId) {
+      setDraggingId(null);
+      setDragOverId(null);
+      return;
+    }
+    const current = [...tagListRef.current];
+    const fromIndex = current.findIndex((t) => t._id === draggingId);
+    const toIndex = current.findIndex((t) => t._id === targetId);
+    if (fromIndex === -1 || toIndex === -1) {
+      setDraggingId(null);
+      setDragOverId(null);
+      return;
+    }
+    const [moved] = current.splice(fromIndex, 1);
+    current.splice(toIndex, 0, moved);
+    setDraggingId(null);
+    setDragOverId(null);
+    syncChange(current);
+  };
+
+  const normalizeDate = (text: string) => {
+    const match = text.trim().match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+    if (!match) return '';
+    const [, y, m, d] = match;
+    const year = y.padStart(4, '0');
+    const month = m.padStart(2, '0');
+    const day = d.padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const normalizeDateTime = (text: string) => {
+    const trimmed = text.trim().replace('T', ' ');
+    const match = trimmed.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})\s+(\d{1,2}):(\d{1,2})(?::\d{1,2})?/);
+    if (!match) return '';
+    const [, y, m, d, hh, mm] = match;
+    const year = y.padStart(4, '0');
+    const month = m.padStart(2, '0');
+    const day = d.padStart(2, '0');
+    const hour = hh.padStart(2, '0');
+    const minute = mm.padStart(2, '0');
+    return `${year}-${month}-${day} ${hour}:${minute}`;
+  };
+
+  const toDatetimeLocalValue = (value: string) => {
+    if (!value) return '';
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(value)) {
+      return value.replace(' ', 'T');
+    }
+    return value;
   };
 
   const handleImageUpload = async (tagId: string | undefined, type: 'image' | 'cda-image') => {
@@ -181,58 +318,93 @@ export default function TemplateTagList({ tags, onChange, templateId }: Template
         );
 
       case 'date':
+        const isDateTextMode = textModeTagId === tagId;
         return (
           <div className="relative">
             <input
-              type="date"
+              type={isDateTextMode ? 'text' : 'date'}
               value={tag.value || ''}
               onChange={(e) => {
-                const date = e.target.value;
-                if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
-                  handleTagValueChange(tagId, date);
+                const raw = e.target.value;
+                if (isDateTextMode) {
+                  const normalized = normalizeDate(raw);
+                  if (normalized) {
+                    handleTagValueChange(tagId, normalized);
+                  } else {
+                    handleTagValueChange(tagId, raw);
+                  }
+                } else {
+                  const date = raw;
+                  if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+                    handleTagValueChange(tagId, date);
+                  }
                 }
               }}
-              className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+              onDoubleClick={(e) => {
+                setTextModeTagId(tagId);
+                (e.target as HTMLInputElement).select();
+              }}
+              onPaste={(e) => {
+                const text = e.clipboardData.getData('text');
+                const normalized = normalizeDate(text);
+                if (normalized) {
+                  e.preventDefault();
+                  handleTagValueChange(tagId, normalized);
+                  return;
+                }
+              }}
+              onBlur={() => setTextModeTagId((prev) => (prev === tagId ? null : prev))}
+              className="w-full px-3 py-2 pr-3 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white appearance-none"
             />
-            <Calendar className="absolute right-3 top-2.5 w-4 h-4 text-gray-400 pointer-events-none" />
           </div>
         );
 
       case 'datetime':
-        // 将 YYYY-MM-DD HH:MM 格式转换为 datetime-local 需要的格式
-        const getDateTimeLocalValue = (value: string) => {
-          if (!value) return '';
-          // 如果已经是 YYYY-MM-DD HH:MM 格式，转换为 datetime-local 格式
-          if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(value)) {
-            return value.replace(' ', 'T');
-          }
-          return value;
-        };
+        const isDateTimeTextMode = textModeTagId === tagId;
         return (
           <div className="relative">
             <input
-              type="datetime-local"
-              value={getDateTimeLocalValue(tag.value || '')}
+              type={isDateTimeTextMode ? 'text' : 'datetime-local'}
+              value={isDateTimeTextMode ? (tag.value || '') : toDatetimeLocalValue(tag.value || '')}
               onChange={(e) => {
-                const datetime = e.target.value;
-                if (datetime) {
-                  // 转换为 YYYY-MM-DD HH:MM 格式
-                  const date = new Date(datetime);
-                  if (!isNaN(date.getTime())) {
-                    const year = date.getFullYear();
-                    const month = String(date.getMonth() + 1).padStart(2, '0');
-                    const day = String(date.getDate()).padStart(2, '0');
-                    const hours = String(date.getHours()).padStart(2, '0');
-                    const minutes = String(date.getMinutes()).padStart(2, '0');
-                    handleTagValueChange(tagId, `${year}-${month}-${day} ${hours}:${minutes}`);
+                const val = e.target.value;
+                if (isDateTimeTextMode) {
+                  if (!val) {
+                    handleTagValueChange(tagId, '');
+                    return;
+                  }
+                  const normalized = normalizeDateTime(val);
+                  if (normalized) {
+                    handleTagValueChange(tagId, normalized);
+                  } else {
+                    handleTagValueChange(tagId, val);
                   }
                 } else {
-                  handleTagValueChange(tagId, '');
+                  if (!val) {
+                    handleTagValueChange(tagId, '');
+                    return;
+                  }
+                  const normalized = normalizeDateTime(val);
+                  if (normalized) {
+                    handleTagValueChange(tagId, normalized);
+                  }
                 }
               }}
-              className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+              onDoubleClick={(e) => {
+                setTextModeTagId(tagId);
+                (e.target as HTMLInputElement).select();
+              }}
+              onPaste={(e) => {
+                const text = e.clipboardData.getData('text');
+                const normalized = normalizeDateTime(text);
+                if (normalized) {
+                  e.preventDefault();
+                  handleTagValueChange(tagId, normalized);
+                }
+              }}
+              onBlur={() => setTextModeTagId((prev) => (prev === tagId ? null : prev))}
+              className="w-full px-3 py-2 pr-3 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white appearance-none"
             />
-            <Clock className="absolute right-3 top-2.5 w-4 h-4 text-gray-400 pointer-events-none" />
           </div>
         );
 
@@ -315,48 +487,147 @@ export default function TemplateTagList({ tags, onChange, templateId }: Template
     }
   };
 
+  const filteredTags = searchTerm.trim()
+    ? tagList.filter((t) => t.name.toLowerCase().includes(searchTerm.trim().toLowerCase()))
+    : tagList;
+
   return (
     <div className="h-full flex flex-col bg-white border-l">
       <div className="px-4 py-3 border-b bg-gray-50">
-        <h3 className="text-sm font-semibold text-gray-800">标签列表</h3>
+        <div className="flex items-center space-x-3">
+          <h3 className="text-sm font-semibold text-gray-800">标签列表</h3>
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="搜索标签名称"
+            className="flex-1 min-w-0 px-3 py-1.5 text-sm border rounded focus:outline-none focus:ring-2 focus:ring-primary-500"
+          />
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {tags.length === 0 ? (
+        {filteredTags.length === 0 ? (
           <div className="text-center text-gray-500 text-sm py-8">
-            暂无标签，点击下方按钮添加
+            {tagList.length === 0 ? '暂无标签，点击下方按钮添加' : '未找到匹配的标签'}
           </div>
         ) : (
-          tags.map((tag) => (
-            <div key={tag._id} className="border rounded-lg p-3 space-y-2">
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <h4 className="text-sm font-medium text-gray-800">{tag.name}</h4>
-                  {tag.description && (
-                    <p className="text-xs text-gray-500 mt-0.5">{tag.description}</p>
-                  )}
-                </div>
-                <div className="flex items-center space-x-1">
-                  <button
-                    type="button"
-                    onClick={() => handleEditTag(tag)}
-                    className="p-1 text-gray-400 hover:text-gray-600"
-                    title="编辑"
+          filteredTags.map((tag) => {
+            const tagId = tag._id || '';
+            return (
+              <div
+                key={tag._id}
+                className={`border rounded-lg p-3 space-y-2 transition-all duration-200 ${
+                  draggingId === tag._id
+                    ? 'shadow-md scale-[0.99] opacity-80'
+                    : dragOverId === tag._id
+                      ? 'border-primary-300 shadow-sm'
+                      : 'hover:shadow-sm'
+                }`}
+                draggable={!editingNameId}
+                onDragStart={() => handleDragStart(tag._id)}
+                onDragOver={(e) => handleDragOver(e, tag._id)}
+                onDrop={() => handleDrop(tag._id)}
+                onDragEnd={() => handleDrop()}
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex items-start space-x-2 flex-1 min-w-0">
+                    <div className="mt-1 text-gray-400 cursor-grab">
+                      <GripVertical className="w-4 h-4" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      {editingNameId === tag._id ? (
+                        <input
+                          type="text"
+                          value={editingNameValue}
+                          onChange={(e) => setEditingNameValue(e.target.value)}
+                          onBlur={() => handleInlineNameSave(tag._id, editingNameValue)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleInlineNameSave(tag._id, editingNameValue);
+                            if (e.key === 'Escape') {
+                              setEditingNameId(null);
+                              setEditingNameValue('');
+                            }
+                          }}
+                          className="w-full px-2 py-1 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                          autoFocus
+                        />
+                      ) : (
+                        <h4
+                          className="text-sm font-medium text-gray-800 cursor-text truncate"
+                          onDoubleClick={() => {
+                            setEditingNameId(tag._id || '');
+                            setEditingNameValue(tag.name);
+                          }}
+                        >
+                          {tag.name}
+                        </h4>
+                      )}
+                    {tag.description && (
+                      <p
+                        className="text-xs text-gray-500 mt-0.5 truncate"
+                        title={tag.description}
+                      >
+                        {tag.description}
+                      </p>
+                    )}
+                    </div>
+                  </div>
+                  <div
+                    id={`tag-menu-wrapper-${tagId}`}
+                    className="relative flex items-center"
                   >
-                    <span className="text-xs">编辑</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteTag(tag._id)}
-                    className="p-1 text-red-400 hover:text-red-600"
-                    title="删除"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setOpenMenuId((prev) => (prev === tagId ? null : tagId || null))
+                      }
+                      className="p-1 text-gray-500 hover:text-gray-700 rounded"
+                      title="更多操作"
+                    >
+                      <MoreVertical className="w-4 h-4" />
+                    </button>
+                    {openMenuId === tagId && (
+                      <div
+                        className="absolute right-0 z-10 mt-1 w-28 rounded border bg-white shadow"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleCopyTag(tag._id);
+                            setOpenMenuId(null);
+                          }}
+                          className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
+                        >
+                          复制
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleEditTag(tag);
+                            setOpenMenuId(null);
+                          }}
+                          className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
+                        >
+                          编辑
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleDeleteTag(tag._id);
+                            setOpenMenuId(null);
+                          }}
+                          className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+                        >
+                          删除
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
+                <div>{renderTagInput(tag)}</div>
               </div>
-              <div>{renderTagInput(tag)}</div>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
       <div className="px-4 py-3 border-t bg-gray-50">

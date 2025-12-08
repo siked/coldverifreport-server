@@ -359,6 +359,8 @@ type CurveChartDataSource = {
   type: 'curveChart';
   config: import('./tiptap/CurveChartConfigPanel').CurveChartConfig;
   imageUrl?: string;
+  // 用于避免重复渲染：由配置 + 关联任务 + 标签值计算出的签名
+  inputSignature?: string;
 };
 
 type DataSourcePayload = TagDataSource | ApiDataSource | CalculationDataSource | CurveChartDataSource;
@@ -1049,6 +1051,72 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
   });
   const [isTestingApi, setIsTestingApi] = useState(false);
   const [apiTestResult, setApiTestResult] = useState<ApiTestResult>(null);
+  const tagsForChartRef = useRef<TemplateTag[]>(tags);
+  const tagsValueSignature = useMemo(() => {
+    const normalized = tags.map((t) => ({
+      id: t._id || t.name,
+      name: t.name,
+      type: t.type,
+      value: t.value,
+    }));
+    normalized.sort((a, b) => (a.id || '').localeCompare(b.id || ''));
+    return JSON.stringify(normalized);
+  }, [tags]);
+
+// 为曲线图收集相关的标签快照（只包含配置中引用到的标签，避免无关标签变动导致重渲染）
+const buildCurveChartTagSnapshot = (config: CurveChartConfig, allTags: TemplateTag[]) => {
+  const relatedIds = new Set<string>();
+  if (config.startTimeTagId) relatedIds.add(config.startTimeTagId);
+  if (config.endTimeTagId) relatedIds.add(config.endTimeTagId);
+
+  config.lines.forEach((line) => {
+    if (line.type === 'curve' && line.locationTags) {
+      line.locationTags.forEach((id) => relatedIds.add(id));
+    }
+    if (line.type === 'average' && line.averageLocationTags) {
+      line.averageLocationTags.forEach((id) => relatedIds.add(id));
+    }
+  });
+
+  (config.phaseNotes || []).forEach((note) => {
+    if (note.type === 'region') {
+      if (note.startTimeTagId) relatedIds.add(note.startTimeTagId);
+      if (note.endTimeTagId) relatedIds.add(note.endTimeTagId);
+    } else if (note.type === 'time') {
+      if (note.timeTagId) relatedIds.add(note.timeTagId);
+    }
+  });
+
+  const snapshot = allTags
+    .filter((t) => (t._id ? relatedIds.has(t._id) : false))
+    .map((t) => ({
+      id: t._id,
+      name: t.name,
+      type: t.type,
+      value: t.value,
+    }))
+    .sort((a, b) => (a.id || '').localeCompare(b.id || ''));
+
+  return snapshot;
+};
+
+// 根据曲线图配置、任务ID与“相关标签值快照”生成输入签名，避免未变更时重复渲染
+const computeCurveChartInputSignature = (
+  config: CurveChartConfig,
+  taskId: string | null | undefined,
+  allTags: TemplateTag[]
+) => {
+  const tagSnapshot = buildCurveChartTagSnapshot(config, allTags);
+  return JSON.stringify({
+    config,
+    taskId: taskId || 'none',
+    tags: tagSnapshot,
+  });
+};
+
+  useEffect(() => {
+    tagsForChartRef.current = tags;
+  }, [tags]);
   
   // 页面格式定义（参考 @tiptap-pro/extension-pages）
   const PAGE_FORMATS = {
@@ -2110,12 +2178,22 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
       }
       
       // 查找所有有曲线图数据来源的图片节点
-      const curveChartImages: Array<{ pos: number; config: CurveChartConfig }> = [];
+      const curveChartImages: Array<{
+        pos: number;
+        config: CurveChartConfig;
+        existingInputSignature?: string;
+        imageUrl?: string;
+      }> = [];
       editor.state.doc.descendants((node, pos) => {
         if (node.type.name === 'image' && node.attrs.dataSource) {
           const dataSource = parseDataSource(node.attrs.dataSource);
           if (dataSource && dataSource.type === 'curveChart' && dataSource.config) {
-            curveChartImages.push({ pos, config: dataSource.config });
+            curveChartImages.push({
+              pos,
+              config: dataSource.config,
+              existingInputSignature: dataSource.inputSignature,
+              imageUrl: dataSource.imageUrl,
+            });
           }
         }
         return true;
@@ -2124,10 +2202,21 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
       // 如果有曲线图需要恢复，重新生成它们
       if (curveChartImages.length > 0) {
         console.log(`[曲线图恢复] 发现 ${curveChartImages.length} 个曲线图需要恢复`);
-        curveChartImages.forEach(async ({ pos, config }) => {
+        curveChartImages.forEach(async ({ pos, config, existingInputSignature, imageUrl }) => {
           try {
+            const nextSignature = computeCurveChartInputSignature(
+              config,
+              selectedTask._id,
+              tagsForChartRef.current
+            );
+            // 如果输入参数未变化且已有图片，则跳过重新渲染
+            if (existingInputSignature && existingInputSignature === nextSignature && imageUrl) {
+              console.log(`[曲线图恢复] 输入未变更，跳过位置 ${pos} 的重渲染`);
+              return;
+            }
+
             const { generateCurveChart } = await import('@/lib/generateCurveChart');
-            const imageBlob = await generateCurveChart(selectedTask._id, config, tags);
+            const imageBlob = await generateCurveChart(selectedTask._id, config, tagsForChartRef.current);
             
             // 上传图片到服务器
             const formData = new FormData();
@@ -2147,6 +2236,7 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
                 type: 'curveChart',
                 config,
                 imageUrl,
+              inputSignature: nextSignature,
               };
               
               applyDataSourceToImage(pos, payload, imageUrl);
@@ -2162,7 +2252,7 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
     };
     
     setTimeout(restoreCurveCharts, 500);
-  }, [editor, selectedTask, tags, applyDataSourceToImage]);
+  }, [editor, selectedTask, tagsValueSignature, applyDataSourceToImage]);
 
   const removeDataSourceFromTarget = useCallback(
     (target?: DataSourceMenuState | null) => {
@@ -4378,6 +4468,30 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
               return;
             }
             try {
+              const nextSignature = computeCurveChartInputSignature(
+                curveChartConfig,
+                selectedTask._id,
+                tags
+              );
+
+              const existingCurve =
+                dataSourceMenu.existingSource && dataSourceMenu.existingSource.type === 'curveChart'
+                  ? (dataSourceMenu.existingSource as CurveChartDataSource)
+                  : null;
+
+              // 输入未发生变化且已有图片，直接复用，避免重复渲染
+              if (
+                existingCurve &&
+                existingCurve.inputSignature === nextSignature &&
+                existingCurve.imageUrl
+              ) {
+                applyDataSourceToImage(dataSourceMenu.imagePos, existingCurve, existingCurve.imageUrl);
+                setActiveDataSourcePanel(null);
+                setDataSourceMenu(null);
+                setCurveChartConfig(null);
+                return;
+              }
+
               setIsUploading(true);
               setUploadProgress(0);
               
@@ -4412,6 +4526,7 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
                 type: 'curveChart',
                 config: curveChartConfig,
                 imageUrl,
+                inputSignature: nextSignature,
               };
 
               // 先应用数据源，然后等待一下确保图片更新
