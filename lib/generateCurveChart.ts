@@ -4,7 +4,7 @@
  */
 
 import { getAllTaskDataFromLoki, getCurrentTaskId } from './lokijs';
-import type { CurveChartConfig, CurveLine } from '@/components/tiptap/CurveChartConfigPanel';
+import type { CurveChartConfig, CurveLine, PhaseNote } from '@/components/tiptap/CurveChartConfigPanel';
 import type { TemplateTag } from '@/components/TemplateTagList';
 
 interface TemperatureHumidityData {
@@ -1094,6 +1094,252 @@ export async function generateCurveChart(
     }
   });
 
+  // 绘制阶段备注
+  if (config.phaseNotes && config.phaseNotes.length > 0) {
+    // 第一步：收集所有备注的位置信息
+    interface NotePosition {
+      phaseNote: PhaseNote;
+      textX: number;
+      textY: number;
+      textWidth: number;
+      textHeight: number;
+      startTime: number; // 用于排序和检测重叠
+      endTime?: number; // 区域备注有结束时间
+      type: 'region' | 'time';
+      color: string;
+      clampedStartX?: number; // 区域备注的矩形框位置
+      clampedEndX?: number;
+      regionWidth?: number;
+      noteX?: number; // 时间备注的虚线位置
+    }
+
+    const notePositions: NotePosition[] = [];
+    const textHeight = 14; // 文本高度（12px字体 + 2px间距）
+    const baseTextY = padding.top + 15; // 基础Y位置
+
+    // 收集所有备注的位置信息
+    config.phaseNotes.forEach((phaseNote) => {
+      if (phaseNote.type === 'region') {
+        const startTimeTag = tags.find((t) => t._id === phaseNote.startTimeTagId);
+        const endTimeTag = tags.find((t) => t._id === phaseNote.endTimeTagId);
+        
+        if (startTimeTag && endTimeTag) {
+          let regionStartTime = parseDateTime(startTimeTag.value);
+          let regionEndTime = parseDateTime(endTimeTag.value);
+          
+          if (regionStartTime && regionEndTime) {
+            let regionStartTimeMs = regionStartTime.getTime() + TIMEZONE_OFFSET_MS;
+            let regionEndTimeMs = regionEndTime.getTime() + TIMEZONE_OFFSET_MS;
+            
+            const chartStartTimeMs = startTime.getTime() + TIMEZONE_OFFSET_MS;
+            const chartEndTimeMs = endTime.getTime() + TIMEZONE_OFFSET_MS;
+            
+            if (regionStartTimeMs < chartStartTimeMs) {
+              regionStartTimeMs = chartStartTimeMs;
+            }
+            if (regionEndTimeMs > chartEndTimeMs) {
+              regionEndTimeMs = chartEndTimeMs;
+            }
+            
+            if (regionStartTimeMs < regionEndTimeMs) {
+              const regionStartX = padding.left + ((regionStartTimeMs - minTime) / timeRange) * chartWidth;
+              const regionEndX = padding.left + ((regionEndTimeMs - minTime) / timeRange) * chartWidth;
+              
+              const clampedStartX = Math.max(padding.left, Math.min(width - padding.right, regionStartX));
+              const clampedEndX = Math.max(padding.left, Math.min(width - padding.right, regionEndX));
+              const regionWidth = Math.max(0, clampedEndX - clampedStartX);
+              
+              if (regionWidth > 0 && phaseNote.content) {
+                // 临时设置字体以测量文本宽度
+                ctx.font = 'bold 12px Arial';
+                const textMetrics = ctx.measureText(phaseNote.content);
+                const textX = clampedStartX + regionWidth / 2;
+                let finalTextX = textX;
+                
+                if (textX - textMetrics.width / 2 < clampedStartX) {
+                  finalTextX = clampedStartX + textMetrics.width / 2;
+                } else if (textX + textMetrics.width / 2 > clampedEndX) {
+                  finalTextX = clampedEndX - textMetrics.width / 2;
+                }
+                
+                if (finalTextX - textMetrics.width / 2 < padding.left) {
+                  finalTextX = padding.left + textMetrics.width / 2;
+                } else if (finalTextX + textMetrics.width / 2 > width - padding.right) {
+                  finalTextX = width - padding.right - textMetrics.width / 2;
+                }
+                
+                notePositions.push({
+                  phaseNote,
+                  textX: finalTextX,
+                  textY: baseTextY,
+                  textWidth: textMetrics.width,
+                  textHeight,
+                  startTime: regionStartTimeMs,
+                  endTime: regionEndTimeMs,
+                  type: 'region',
+                  color: phaseNote.color || '#3b82f6',
+                  clampedStartX,
+                  clampedEndX,
+                  regionWidth,
+                });
+              }
+            }
+          }
+        }
+      } else if (phaseNote.type === 'time') {
+        const timeTag = tags.find((t) => t._id === phaseNote.timeTagId);
+        
+        if (timeTag) {
+          let noteTime = parseDateTime(timeTag.value);
+          
+          if (noteTime) {
+            let noteTimeMs = noteTime.getTime() + TIMEZONE_OFFSET_MS;
+            
+            const chartStartTimeMs = startTime.getTime() + TIMEZONE_OFFSET_MS;
+            const chartEndTimeMs = endTime.getTime() + TIMEZONE_OFFSET_MS;
+            
+            if (noteTimeMs < chartStartTimeMs) {
+              noteTimeMs = chartStartTimeMs;
+            }
+            if (noteTimeMs > chartEndTimeMs) {
+              noteTimeMs = chartEndTimeMs;
+            }
+            
+            let noteX = padding.left + ((noteTimeMs - minTime) / timeRange) * chartWidth;
+            noteX = Math.max(padding.left, Math.min(width - padding.right, noteX));
+            
+            if (phaseNote.content) {
+              // 临时设置字体以测量文本宽度
+              ctx.font = 'bold 12px Arial';
+              const textMetrics = ctx.measureText(phaseNote.content);
+              let finalTextX = noteX;
+              
+              if (noteX - textMetrics.width / 2 < padding.left) {
+                finalTextX = padding.left + textMetrics.width / 2;
+              } else if (noteX + textMetrics.width / 2 > width - padding.right) {
+                finalTextX = width - padding.right - textMetrics.width / 2;
+              }
+              
+              notePositions.push({
+                phaseNote,
+                textX: finalTextX,
+                textY: baseTextY,
+                textWidth: textMetrics.width,
+                textHeight,
+                startTime: noteTimeMs,
+                type: 'time',
+                color: phaseNote.color || '#3b82f6',
+                noteX,
+              });
+            }
+          }
+        }
+      }
+    });
+
+    // 第二步：按开始时间排序
+    notePositions.sort((a, b) => a.startTime - b.startTime);
+
+    // 第三步：检测重叠并调整位置
+    const lineSpacing = textHeight + 5; // 行间距
+    for (let i = 0; i < notePositions.length; i++) {
+      const current = notePositions[i];
+      let adjustedY = current.textY;
+      
+      // 检查与之前所有备注的重叠
+      for (let j = 0; j < i; j++) {
+        const previous = notePositions[j];
+        
+        // 检测水平重叠：检查两个文本的X范围是否重叠
+        const currentLeft = current.textX - current.textWidth / 2;
+        const currentRight = current.textX + current.textWidth / 2;
+        const previousLeft = previous.textX - previous.textWidth / 2;
+        const previousRight = previous.textX + previous.textWidth / 2;
+        
+        const horizontalOverlap = !(currentRight < previousLeft || currentLeft > previousRight);
+        
+        // 检测垂直重叠：检查Y位置是否太接近
+        const verticalOverlap = Math.abs(previous.textY - adjustedY) < lineSpacing;
+        
+        if (horizontalOverlap && verticalOverlap) {
+          // 有重叠，将当前备注向下移动
+          adjustedY = previous.textY + lineSpacing;
+        }
+      }
+      
+      // 确保不超出图表底部
+      const maxY = height - padding.bottom - textHeight;
+      if (adjustedY > maxY) {
+        adjustedY = maxY;
+      }
+      
+      current.textY = adjustedY;
+    }
+
+    // 第四步：绘制所有备注
+    notePositions.forEach((notePos) => {
+      const { phaseNote, textX, textY, color, clampedStartX, clampedEndX, regionWidth, noteX } = notePos;
+      
+      if (phaseNote.type === 'region') {
+        // 绘制区域备注的矩形框和虚线
+        const r = parseInt(color.slice(1, 3), 16);
+        const g = parseInt(color.slice(3, 5), 16);
+        const b = parseInt(color.slice(5, 7), 16);
+        
+        // 绘制矩形框
+        ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.2)`;
+        ctx.fillRect(clampedStartX!, padding.top, regionWidth!, chartHeight);
+        
+        // 绘制左右虚线
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        
+        ctx.beginPath();
+        ctx.moveTo(clampedStartX!, padding.top);
+        ctx.lineTo(clampedStartX!, height - padding.bottom);
+        ctx.stroke();
+        
+        ctx.beginPath();
+        ctx.moveTo(clampedEndX!, padding.top);
+        ctx.lineTo(clampedEndX!, height - padding.bottom);
+        ctx.stroke();
+        
+        ctx.setLineDash([]);
+        
+        // 绘制备注内容
+        if (phaseNote.content) {
+          ctx.fillStyle = color;
+          ctx.font = 'bold 12px Arial';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          ctx.fillText(phaseNote.content, textX, textY);
+        }
+      } else if (phaseNote.type === 'time') {
+        // 绘制时间备注的虚线
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 5]);
+        
+        ctx.beginPath();
+        ctx.moveTo(noteX!, padding.top);
+        ctx.lineTo(noteX!, height - padding.bottom);
+        ctx.stroke();
+        
+        ctx.setLineDash([]);
+        
+        // 绘制备注内容
+        if (phaseNote.content) {
+          ctx.fillStyle = color;
+          ctx.font = 'bold 12px Arial';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'top';
+          ctx.fillText(phaseNote.content, textX, textY);
+        }
+      }
+    });
+  }
+
   // 绘制图例（在图表下方，从左往右排列，自适应列数，几乎贴近）
   const legendStartY = height - padding.bottom + 52;
   const legendItemHeight = 22; // 每个图例项的高度，适应更大的字体
@@ -1128,13 +1374,9 @@ export async function generateCurveChart(
     ctx.font = '13px Arial'; // 从11px增加到13px
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    // 如果文本太长，截断（考虑线条宽度25px + 间距3px = 28px）
+    // 完整显示标签，不截断
     const label = dataset.label || `线条 ${index + 1}`;
-    const maxLabelWidth = Math.max(20, legendItemWidth - 28); // 保持足够的文本显示空间，至少20px
-    const truncatedLabel = ctx.measureText(label).width > maxLabelWidth 
-      ? label.substring(0, Math.floor(label.length * maxLabelWidth / ctx.measureText(label).width)) + '...'
-      : label;
-    ctx.fillText(truncatedLabel, legendX + 28, legendY);
+    ctx.fillText(label, legendX + 28, legendY);
   });
 
   // 转换为 Blob
@@ -1152,4 +1394,3 @@ export async function generateCurveChart(
     );
   });
 }
-

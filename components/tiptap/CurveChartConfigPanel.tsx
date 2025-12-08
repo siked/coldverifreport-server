@@ -22,6 +22,19 @@ export interface CurveLine {
   lineStyle: 'solid' | 'dashed' | 'dotted'; // 线条样式
 }
 
+export interface PhaseNote {
+  id: string;
+  type: 'region' | 'time'; // 区域备注或时间备注
+  // 区域备注参数
+  startTimeTagId?: string; // 开始时间标签ID
+  endTimeTagId?: string; // 结束时间标签ID
+  // 时间备注参数
+  timeTagId?: string; // 时间位置标签ID
+  // 通用参数
+  content: string; // 备注内容
+  color: string; // 备注颜色，默认蓝色
+}
+
 export interface CurveChartConfig {
   startTimeTagId: string; // 开始时间标签ID
   endTimeTagId: string; // 结束时间标签ID
@@ -30,6 +43,7 @@ export interface CurveChartConfig {
   dataType: 'temperature' | 'humidity'; // 温度或湿度
   title?: string; // 曲线图标题
   lines: CurveLine[]; // 线条配置
+  phaseNotes?: PhaseNote[]; // 阶段备注配置
 }
 
 interface CurveChartConfigPanelProps {
@@ -60,6 +74,7 @@ export default function CurveChartConfigPanel({
       dataType: 'temperature',
       title: '',
       lines: [],
+      phaseNotes: [],
     }
   );
 
@@ -72,7 +87,12 @@ export default function CurveChartConfigPanel({
   const [showAddLineMenu, setShowAddLineMenu] = useState(false);
   const [editingLine, setEditingLine] = useState<CurveLine | null>(null);
   const [showLineForm, setShowLineForm] = useState<'curve' | 'average' | 'line' | null>(null);
+  const [activeTab, setActiveTab] = useState<'lines' | 'phaseNotes'>('lines'); // TAB切换：线条配置/阶段备注
+  const [editingPhaseNote, setEditingPhaseNote] = useState<PhaseNote | null>(null);
+  const [showPhaseNoteForm, setShowPhaseNoteForm] = useState<'region' | 'time' | null>(null);
+  const [showAddPhaseNoteMenu, setShowAddPhaseNoteMenu] = useState(false);
   const addLineMenuRef = useRef<HTMLDivElement>(null);
+  const addPhaseNoteMenuRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const [adjustedPosition, setAdjustedPosition] = useState(position);
   const isPositionAdjustedRef = useRef(false); // 标记是否已经调整过位置
@@ -156,6 +176,80 @@ export default function CurveChartConfigPanel({
   const handleDeleteLine = (lineId: string) => {
     updateConfig({
       lines: localConfig.lines.filter((line) => line.id !== lineId),
+    });
+  };
+
+  // 阶段备注相关函数
+  const handleAddPhaseNote = (type: 'region' | 'time') => {
+    const newPhaseNote: PhaseNote = {
+      id: `phaseNote_${Date.now()}`,
+      type,
+      content: '',
+      color: '#3b82f6', // 默认蓝色
+      ...(type === 'region' && { startTimeTagId: '', endTimeTagId: '' }),
+      ...(type === 'time' && { timeTagId: '' }),
+    };
+    setEditingPhaseNote(newPhaseNote);
+    setShowPhaseNoteForm(type);
+  };
+
+  const handleEditPhaseNote = (phaseNote: PhaseNote) => {
+    setEditingPhaseNote({ ...phaseNote });
+    setShowPhaseNoteForm(phaseNote.type);
+  };
+
+  const handleSavePhaseNote = () => {
+    if (!editingPhaseNote) return;
+
+    // 验证区域备注
+    if (editingPhaseNote.type === 'region') {
+      if (!editingPhaseNote.startTimeTagId || !editingPhaseNote.endTimeTagId) {
+        alert('请选择开始时间和结束时间');
+        return;
+      }
+    }
+
+    // 验证时间备注
+    if (editingPhaseNote.type === 'time') {
+      if (!editingPhaseNote.timeTagId) {
+        alert('请选择时间位置');
+        return;
+      }
+    }
+
+    if (!editingPhaseNote.content.trim()) {
+      alert('请输入备注内容');
+      return;
+    }
+
+    const phaseNoteToSave: PhaseNote = {
+      id: editingPhaseNote.id || `phaseNote_${Date.now()}`,
+      type: editingPhaseNote.type,
+      content: editingPhaseNote.content.trim(),
+      color: editingPhaseNote.color || '#3b82f6',
+      ...(editingPhaseNote.type === 'region' && {
+        startTimeTagId: editingPhaseNote.startTimeTagId,
+        endTimeTagId: editingPhaseNote.endTimeTagId,
+      }),
+      ...(editingPhaseNote.type === 'time' && {
+        timeTagId: editingPhaseNote.timeTagId,
+      }),
+    };
+
+    const currentPhaseNotes = localConfig.phaseNotes || [];
+    const updatedPhaseNotes = phaseNoteToSave.id && currentPhaseNotes.some(note => note.id === phaseNoteToSave.id)
+      ? currentPhaseNotes.map((note) => (note.id === phaseNoteToSave.id ? phaseNoteToSave : note))
+      : [...currentPhaseNotes, phaseNoteToSave];
+
+    updateConfig({ phaseNotes: updatedPhaseNotes });
+    setEditingPhaseNote(null);
+    setShowPhaseNoteForm(null);
+  };
+
+  const handleDeletePhaseNote = (phaseNoteId: string) => {
+    const currentPhaseNotes = localConfig.phaseNotes || [];
+    updateConfig({
+      phaseNotes: currentPhaseNotes.filter((note) => note.id !== phaseNoteId),
     });
   };
 
@@ -353,6 +447,22 @@ export default function CurveChartConfigPanel({
     }
   }, [showAddLineMenu]);
 
+  // 点击外部关闭添加阶段备注菜单
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (addPhaseNoteMenuRef.current && !addPhaseNoteMenuRef.current.contains(event.target as Node)) {
+        setShowAddPhaseNoteMenu(false);
+      }
+    };
+
+    if (showAddPhaseNoteMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+      };
+    }
+  }, [showAddPhaseNoteMenu]);
+
   return (
     <>
     <div
@@ -503,11 +613,40 @@ export default function CurveChartConfigPanel({
         </div>
 
 
-        {/* 线条列表 */}
+        {/* 线条配置和阶段备注 TAB切换 */}
         <div>
-          <div className="flex items-center justify-between mb-2">
-            <label className="block text-xs text-gray-500">线条配置</label>
-            <div className="relative" ref={addLineMenuRef} data-curve-chart-add-line="true">
+          {/* TAB 切换 */}
+          <div className="flex border-b mb-3">
+            <button
+              type="button"
+              onClick={() => setActiveTab('lines')}
+              className={`flex-1 px-4 py-2 text-sm font-medium ${
+                activeTab === 'lines'
+                  ? 'text-primary-600 border-b-2 border-primary-600'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              线条配置
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('phaseNotes')}
+              className={`flex-1 px-4 py-2 text-sm font-medium ${
+                activeTab === 'phaseNotes'
+                  ? 'text-primary-600 border-b-2 border-primary-600'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              阶段备注
+            </button>
+          </div>
+
+          {/* 线条配置内容 */}
+          {activeTab === 'lines' && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-xs text-gray-500">线条配置</label>
+                <div className="relative" ref={addLineMenuRef} data-curve-chart-add-line="true">
               <button
                 type="button"
                 data-curve-chart-add-line-button="true"
@@ -550,7 +689,7 @@ export default function CurveChartConfigPanel({
                     className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center space-x-2"
                   >
                     <TrendingUp className="w-4 h-4" />
-                    <span>添加曲线参数</span>
+                    <span>添加曲线</span>
                   </button>
                   <button
                     type="button"
@@ -565,7 +704,7 @@ export default function CurveChartConfigPanel({
                     className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center space-x-2"
                   >
                     <TrendingUp className="w-4 h-4" />
-                    <span>添加平均值曲线参数</span>
+                    <span>添加平均值曲线</span>
                   </button>
                   <button
                     type="button"
@@ -580,7 +719,7 @@ export default function CurveChartConfigPanel({
                     className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center space-x-2"
                   >
                     <TrendingUp className="w-4 h-4" />
-                    <span>添加直线参数</span>
+                    <span>添加直线</span>
                   </button>
                 </div>
               )}
@@ -590,72 +729,222 @@ export default function CurveChartConfigPanel({
           {localConfig.lines.length === 0 ? (
             <p className="text-xs text-gray-400 text-center py-4">暂无线条，请点击"添加线条"添加</p>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2">
               {localConfig.lines.map((line) => (
                 <div
                   key={line.id}
-                  className="border rounded p-3 bg-gray-50 hover:bg-gray-100 transition-colors"
+                  className="border rounded px-3 py-2 bg-gray-50 hover:bg-gray-100 transition-colors"
                 >
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-medium text-gray-700">
-                      {line.type === 'curve'
-                        ? '曲线'
-                        : line.type === 'average'
-                        ? '平均值曲线'
-                        : line.lineName || '直线'}
-                    </span>
-                    <div className="flex items-center space-x-2">
-                      <button
-                        type="button"
-                        onClick={() => handleEditLine(line)}
-                        className="text-xs text-primary-600 hover:text-primary-700"
-                      >
-                        编辑
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteLine(line.id)}
-                        className="text-xs text-red-600 hover:text-red-700"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-gray-700">
+                        {line.type === 'curve'
+                          ? '曲线'
+                          : line.type === 'average'
+                          ? '平均值曲线'
+                          : line.lineName || '直线'}
+                      </span>
+                      <div className="flex items-center space-x-2">
+                        <button
+                          type="button"
+                          onClick={() => handleEditLine(line)}
+                          className="text-xs text-primary-600 hover:text-primary-700"
+                        >
+                          编辑
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteLine(line.id)}
+                          className="text-xs text-red-600 hover:text-red-700"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                  <div className="text-xs text-gray-500 space-y-1">
-                    {line.type === 'curve' && (
-                      <p>
-                        布点标签：
-                        {line.locationTags && line.locationTags.length > 0
-                          ? getLocationTagValues(line.locationTags).join(' | ')
-                          : '未选择'}
-                      </p>
+                    {(line.type === 'curve' || line.type === 'average' || line.lineNote) && (
+                      <div className="text-xs text-gray-500">
+                        {line.type === 'curve' && (
+                          <span>
+                            布点：{line.locationTags && line.locationTags.length > 0
+                              ? getLocationTagValues(line.locationTags).join(' | ')
+                              : '未选择'}
+                          </span>
+                        )}
+                        {line.type === 'average' && (
+                          <span>
+                            布点：{line.averageLocationTags && line.averageLocationTags.length > 0
+                              ? getLocationTagValues(line.averageLocationTags).join(' | ')
+                              : '未选择'}
+                          </span>
+                        )}
+                        {line.type === 'line' && line.lineNote && (
+                          <span>备注：{line.lineNote}</span>
+                        )}
+                      </div>
                     )}
-                    {line.type === 'average' && (
-                      <>
-                        <p>
-                          布点标签：
-                          {line.averageLocationTags && line.averageLocationTags.length > 0
-                            ? getLocationTagValues(line.averageLocationTags).join(' | ')
-                            : '未选择'}
-                        </p>
-                        <p>颜色：{line.averageColor}</p>
-                      </>
-                    )}
-                    {line.type === 'line' && (
-                      <>
-                        <p>名称：{line.lineName}</p>
-                        <p>颜色：{line.lineColor}</p>
-                        <p>固定值：{line.lineValue !== undefined ? line.lineValue : '未设置'}</p>
-                        {line.lineNote && <p>备注：{line.lineNote}</p>}
-                      </>
-                    )}
-                    <p>
-                      宽度：{line.lineWidth} | 样式：
-                      {line.lineStyle === 'solid' ? '实线' : line.lineStyle === 'dashed' ? '虚线' : '点线'}
-                    </p>
+                    <div className="flex items-center gap-3 text-xs text-gray-500">
+                      {line.type === 'line' && (
+                        <>
+                          <span>固定值：{line.lineValue !== undefined ? line.lineValue : '未设置'}</span>
+                          <span className="text-gray-400">|</span>
+                        </>
+                      )}
+                      <span className="flex items-center gap-1">
+                        颜色：
+                        <span className="inline-block w-4 h-4 rounded border border-gray-300" style={{ backgroundColor: line.type === 'average' ? (line.averageColor || '#3b82f6') : line.type === 'line' ? (line.lineColor || '#ef4444') : '#3b82f6' }}></span>
+                      </span>
+                      <span className="text-gray-400">|</span>
+                      <span>宽度：{line.lineWidth}</span>
+                      <span className="text-gray-400">|</span>
+                      <span>样式：{line.lineStyle === 'solid' ? '实线' : line.lineStyle === 'dashed' ? '虚线' : '点线'}</span>
+                    </div>
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+            </div>
+          )}
+
+          {/* 阶段备注内容 */}
+          {activeTab === 'phaseNotes' && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-xs text-gray-500">阶段备注</label>
+                <div className="relative" ref={addPhaseNoteMenuRef}>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      setShowAddPhaseNoteMenu(!showAddPhaseNoteMenu);
+                    }}
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                    }}
+                    disabled={!selectedTaskId}
+                    className="inline-flex items-center space-x-1 px-3 py-1.5 text-sm bg-primary-600 text-white rounded hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>添加备注</span>
+                  </button>
+                  {showAddPhaseNoteMenu && (
+                    <div
+                      className="absolute right-0 mt-1 bg-white border rounded-lg shadow-lg py-1 z-20 min-w-[180px] data-source-popover"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                      }}
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                          handleAddPhaseNote('region');
+                          setShowAddPhaseNoteMenu(false);
+                        }}
+                        onMouseDown={(e) => {
+                          e.stopPropagation();
+                        }}
+                        className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+                      >
+                        添加区域备注
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          e.preventDefault();
+                          handleAddPhaseNote('time');
+                          setShowAddPhaseNoteMenu(false);
+                        }}
+                        onMouseDown={(e) => {
+                          e.stopPropagation();
+                        }}
+                        className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100"
+                      >
+                        添加时间备注
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {(!localConfig.phaseNotes || localConfig.phaseNotes.length === 0) ? (
+                <p className="text-xs text-gray-400 text-center py-4">暂无阶段备注，请点击"添加阶段备注"添加</p>
+              ) : (
+                <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2">
+                  {localConfig.phaseNotes.map((phaseNote) => (
+                    <div
+                      key={phaseNote.id}
+                      className="border rounded px-3 py-2 bg-gray-50 hover:bg-gray-100 transition-colors"
+                    >
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium text-gray-700">
+                            {phaseNote.type === 'region' ? '区域备注' : '时间备注'}
+                          </span>
+                          <div className="flex items-center space-x-2">
+                            <button
+                              type="button"
+                              onClick={() => handleEditPhaseNote(phaseNote)}
+                              className="text-xs text-primary-600 hover:text-primary-700"
+                            >
+                              编辑
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeletePhaseNote(phaseNote.id)}
+                              className="text-xs text-red-600 hover:text-red-700"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {phaseNote.type === 'region' && (
+                            <>
+                              <span>
+                                开始时间：{phaseNote.startTimeTagId
+                                  ? dateTimeTags.find(t => t._id === phaseNote.startTimeTagId)?.name || '未选择'
+                                  : '未选择'}
+                              </span>
+                              <span className="text-gray-400 mx-2">|</span>
+                              <span>
+                                结束时间：{phaseNote.endTimeTagId
+                                  ? dateTimeTags.find(t => t._id === phaseNote.endTimeTagId)?.name || '未选择'
+                                  : '未选择'}
+                              </span>
+                            </>
+                          )}
+                          {phaseNote.type === 'time' && (
+                            <span>
+                              时间位置：{phaseNote.timeTagId
+                                ? dateTimeTags.find(t => t._id === phaseNote.timeTagId)?.name || '未选择'
+                                : '未选择'}
+                            </span>
+                          )}
+                        </div>
+                        {phaseNote.content && (
+                          <div className="text-xs text-gray-500">
+                            备注内容：{phaseNote.content}
+                          </div>
+                        )}
+                        <div className="flex items-center gap-3 text-xs text-gray-500">
+                          <span className="flex items-center gap-1">
+                            颜色：
+                            <span className="inline-block w-4 h-4 rounded border border-gray-300" style={{ backgroundColor: phaseNote.color || '#3b82f6' }}></span>
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1013,6 +1302,155 @@ export default function CurveChartConfigPanel({
               <button
                 type="button"
                 onClick={handleSaveLine}
+                className="px-4 py-2 text-sm bg-primary-600 text-white rounded hover:bg-primary-700"
+              >
+                保存
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* 阶段备注编辑表单 - 独立弹窗 */}
+    {showPhaseNoteForm && editingPhaseNote && (
+      <div 
+        className="fixed inset-0 z-[100] flex items-center justify-center bg-black bg-opacity-50 data-source-popover"
+        data-curve-chart-phase-note-form="true"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) {
+            setShowPhaseNoteForm(null);
+            setEditingPhaseNote(null);
+          }
+        }}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div 
+          className="bg-white rounded-lg shadow-2xl w-[500px] max-h-[90vh] overflow-y-auto p-6 data-source-popover"
+          data-curve-chart-phase-note-form-content="true"
+          onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+        >
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-lg font-semibold text-gray-800">
+              {editingPhaseNote.type === 'region' ? '添加区域备注' : '添加时间备注'}
+            </p>
+            <button
+              type="button"
+              onClick={() => {
+                setShowPhaseNoteForm(null);
+                setEditingPhaseNote(null);
+              }}
+              className="text-gray-400 hover:text-gray-600 p-1"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          <div className="space-y-4">
+            {editingPhaseNote.type === 'region' && (
+              <>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">
+                    选择开始时间 <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={editingPhaseNote.startTimeTagId || ''}
+                    onChange={(e) => setEditingPhaseNote({ ...editingPhaseNote, startTimeTagId: e.target.value })}
+                    className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  >
+                    <option value="">请选择标签（类型为日期、时间）</option>
+                    {dateTimeTags.map((tag) => (
+                      <option key={tag._id} value={tag._id}>
+                        {tag.name} ({tag.type === 'date' ? '日期' : '时间'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">
+                    选择结束时间 <span className="text-red-500">*</span>
+                  </label>
+                  <select
+                    value={editingPhaseNote.endTimeTagId || ''}
+                    onChange={(e) => setEditingPhaseNote({ ...editingPhaseNote, endTimeTagId: e.target.value })}
+                    className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  >
+                    <option value="">请选择标签（类型为日期、时间）</option>
+                    {dateTimeTags.map((tag) => (
+                      <option key={tag._id} value={tag._id}>
+                        {tag.name} ({tag.type === 'date' ? '日期' : '时间'})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </>
+            )}
+
+            {editingPhaseNote.type === 'time' && (
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">
+                  选择时间位置 <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={editingPhaseNote.timeTagId || ''}
+                  onChange={(e) => setEditingPhaseNote({ ...editingPhaseNote, timeTagId: e.target.value })}
+                  className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                >
+                  <option value="">请选择标签（类型为日期、时间）</option>
+                  {dateTimeTags.map((tag) => (
+                    <option key={tag._id} value={tag._id}>
+                      {tag.name} ({tag.type === 'date' ? '日期' : '时间'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">
+                备注内容 <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={editingPhaseNote.content || ''}
+                onChange={(e) => setEditingPhaseNote({ ...editingPhaseNote, content: e.target.value })}
+                className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                placeholder="请输入备注内容"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">备注颜色</label>
+              <div className="flex items-center space-x-2">
+                <input
+                  type="color"
+                  value={editingPhaseNote.color || '#3b82f6'}
+                  onChange={(e) => setEditingPhaseNote({ ...editingPhaseNote, color: e.target.value })}
+                  className="w-12 h-8 border rounded"
+                />
+                <input
+                  type="text"
+                  value={editingPhaseNote.color || '#3b82f6'}
+                  onChange={(e) => setEditingPhaseNote({ ...editingPhaseNote, color: e.target.value })}
+                  className="flex-1 px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end space-x-2 pt-4 border-t mt-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPhaseNoteForm(null);
+                  setEditingPhaseNote(null);
+                }}
+                className="px-4 py-2 text-sm border rounded text-gray-700 hover:bg-gray-50"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                onClick={handleSavePhaseNote}
                 className="px-4 py-2 text-sm bg-primary-600 text-white rounded hover:bg-primary-700"
               >
                 保存
