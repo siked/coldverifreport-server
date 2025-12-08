@@ -124,9 +124,18 @@ const CustomImage = Node.create({
   },
   renderHTML({ HTMLAttributes }) {
     const attrs = { ...HTMLAttributes };
-    if (attrs['data-source']) {
+    // 检查 dataSource 属性（Tiptap 会将 data-source 转换为 dataSource）
+    if (attrs.dataSource || attrs['data-source']) {
       attrs.class = `${attrs.class || ''} ${DATA_SOURCE_CLASS}`.trim();
       attrs[DATA_SOURCE_ELEMENT_ATTR] = 'image';
+      // 确保 data-source 属性被正确输出
+      if (attrs.dataSource && !attrs['data-source']) {
+        attrs['data-source'] = attrs.dataSource;
+      }
+      // 确保 data-source-type 属性被正确输出
+      if (attrs.dataSourceType && !attrs['data-source-type']) {
+        attrs['data-source-type'] = attrs.dataSourceType;
+      }
     }
     return ['img', mergeAttributes(this.options.HTMLAttributes, attrs)];
   },
@@ -712,6 +721,13 @@ interface TiptapEditorProps {
   onChangeTags: (tags: TemplateTag[]) => void;
   templateId?: string;
   templateName?: string;
+  initialSelectedTask?: {
+    _id: string;
+    taskNumber: string;
+    taskName: string;
+    categoryId: string;
+    taskTypeId: string;
+  } | null;
   onTaskChange?: (task: {
     _id: string;
     taskNumber: string;
@@ -976,7 +992,7 @@ const createTurndown = () => {
   return turndown;
 };
 
-const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, onSave, tags, onChangeTags, templateId, templateName, onTaskChange }, ref) => {
+const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, onSave, tags, onChangeTags, templateId, templateName, initialSelectedTask, onTaskChange }, ref) => {
   const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -1057,8 +1073,24 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
     taskName: string;
     categoryId: string;
     taskTypeId: string;
-  } | null>(null);
+  } | null>(initialSelectedTask || null);
   const [showTaskSelector, setShowTaskSelector] = useState(false);
+
+  // 同步 initialSelectedTask 的变化到 selectedTask
+  useEffect(() => {
+    const taskId = initialSelectedTask?._id;
+    const currentTaskId = selectedTask?._id;
+    
+    // 只有当任务ID真正改变时才更新
+    if (taskId !== currentTaskId) {
+      if (initialSelectedTask) {
+        setSelectedTask(initialSelectedTask);
+      } else if (initialSelectedTask === null) {
+        // 只有当明确传递 null 时才清空（避免 undefined 时误清空）
+        setSelectedTask(null);
+      }
+    }
+  }, [initialSelectedTask?._id, selectedTask?._id]); // 只依赖任务ID，避免对象引用变化导致重复更新
 
   const htmlContent = useMemo(() => {
     try {
@@ -1987,6 +2019,16 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
           // 直接更新 src
           imgElement.src = urlWithTimestamp;
           
+          // 确保 data-source 属性被正确设置
+          const dataSourceStr = stringifyDataSource(payload);
+          if (dataSourceStr) {
+            imgElement.setAttribute('data-source', dataSourceStr);
+            imgElement.setAttribute('data-source-type', payload.type);
+            if (formatTooltip(payload)) {
+              imgElement.setAttribute('title', formatTooltip(payload));
+            }
+          }
+          
           // 如果时间戳版本加载失败，回退到原始 URL
           imgElement.onerror = () => {
             console.warn('Image with timestamp failed, falling back to original URL');
@@ -2015,6 +2057,16 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
                 console.log('Found DOM img element by position, updating src');
                 const urlWithTimestamp = nextSrc + (nextSrc.includes('?') ? '&' : '?') + '_t=' + Date.now();
                 imgElement.src = urlWithTimestamp;
+                
+                // 确保 data-source 属性被正确设置
+                const dataSourceStr = stringifyDataSource(payload);
+                if (dataSourceStr) {
+                  imgElement.setAttribute('data-source', dataSourceStr);
+                  imgElement.setAttribute('data-source-type', payload.type);
+                  if (formatTooltip(payload)) {
+                    imgElement.setAttribute('title', formatTooltip(payload));
+                  }
+                }
               }
             }
           } catch (e) {
@@ -2025,6 +2077,92 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
     },
     [editor]
   );
+
+  // 页面加载后，恢复所有曲线图数据来源
+  useEffect(() => {
+    if (!editor || !selectedTask) return;
+    
+    // 延迟执行，确保 DOM 已更新，并等待任务数据加载完成
+    const restoreCurveCharts = async () => {
+      if (!editor || !selectedTask) return;
+      
+      // 检查任务数据是否已加载到 LokiJS
+      try {
+        const { getCurrentTaskId, getAllTaskDataFromLoki } = await import('@/lib/lokijs');
+        const currentTaskId = getCurrentTaskId();
+        if (currentTaskId !== selectedTask._id) {
+          console.log(`[曲线图恢复] 任务数据未加载，等待中... (任务ID: ${selectedTask._id})`);
+          // 如果数据未加载，延迟重试
+          setTimeout(restoreCurveCharts, 1000);
+          return;
+        }
+        
+        const allData = getAllTaskDataFromLoki(selectedTask._id);
+        if (allData.length === 0) {
+          console.log(`[曲线图恢复] 任务数据为空，等待中... (任务ID: ${selectedTask._id})`);
+          // 如果数据为空，延迟重试
+          setTimeout(restoreCurveCharts, 1000);
+          return;
+        }
+      } catch (err) {
+        console.error('[曲线图恢复] 检查任务数据失败:', err);
+        return;
+      }
+      
+      // 查找所有有曲线图数据来源的图片节点
+      const curveChartImages: Array<{ pos: number; config: CurveChartConfig }> = [];
+      editor.state.doc.descendants((node, pos) => {
+        if (node.type.name === 'image' && node.attrs.dataSource) {
+          const dataSource = parseDataSource(node.attrs.dataSource);
+          if (dataSource && dataSource.type === 'curveChart' && dataSource.config) {
+            curveChartImages.push({ pos, config: dataSource.config });
+          }
+        }
+        return true;
+      });
+      
+      // 如果有曲线图需要恢复，重新生成它们
+      if (curveChartImages.length > 0) {
+        console.log(`[曲线图恢复] 发现 ${curveChartImages.length} 个曲线图需要恢复`);
+        curveChartImages.forEach(async ({ pos, config }) => {
+          try {
+            const { generateCurveChart } = await import('@/lib/generateCurveChart');
+            const imageBlob = await generateCurveChart(selectedTask._id, config, tags);
+            
+            // 上传图片到服务器
+            const formData = new FormData();
+            formData.append('file', imageBlob, 'curve-chart.png');
+            
+            const response = await fetch('/api/upload/image', {
+              method: 'POST',
+              body: formData,
+            });
+            
+            if (response.ok) {
+              const data = await response.json();
+              const imageUrl = data.url;
+              
+              // 更新图片节点
+              const payload: CurveChartDataSource = {
+                type: 'curveChart',
+                config,
+                imageUrl,
+              };
+              
+              applyDataSourceToImage(pos, payload, imageUrl);
+              console.log(`[曲线图恢复] 成功恢复曲线图，位置: ${pos}`);
+            } else {
+              console.error(`[曲线图恢复] 上传曲线图失败，位置: ${pos}`);
+            }
+          } catch (err: any) {
+            console.error(`[曲线图恢复] 恢复曲线图失败，位置: ${pos}:`, err);
+          }
+        });
+      }
+    };
+    
+    setTimeout(restoreCurveCharts, 500);
+  }, [editor, selectedTask, tags, applyDataSourceToImage]);
 
   const removeDataSourceFromTarget = useCallback(
     (target?: DataSourceMenuState | null) => {
@@ -3457,40 +3595,72 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
       
       // 检查是否是图片，并且有数据来源
       const imgElement = target.closest('img');
-      if (imgElement && imgElement.hasAttribute('data-source')) {
-        event.preventDefault();
-        event.stopPropagation();
+      if (imgElement) {
+        // 检查 DOM 元素是否有 data-source 属性，或者检查节点属性
+        const hasDataSourceAttr = imgElement.hasAttribute('data-source');
         
+        // 尝试通过 DOM 元素找到对应的节点位置
         let imagePos = -1;
+        const imgSrc = (imgElement as HTMLImageElement).src;
+        // 移除时间戳参数进行匹配
+        const baseSrc = imgSrc.split('?')[0].split('&')[0];
+        
         editor.state.doc.descendants((node, pos) => {
-          if (node.type.name === 'image' && node.attrs.src === (imgElement as HTMLImageElement).src) {
-            imagePos = pos;
-            return false;
+          if (node.type.name === 'image') {
+            const nodeSrc = node.attrs.src || '';
+            const nodeBaseSrc = nodeSrc.split('?')[0].split('&')[0];
+            // 匹配基础 URL（不包含查询参数）
+            if (nodeBaseSrc === baseSrc || nodeSrc === imgSrc) {
+              // 检查节点是否有数据来源
+              if (node.attrs.dataSource || hasDataSourceAttr) {
+                imagePos = pos;
+                return false;
+              }
+            }
           }
           return true;
         });
+        
         if (imagePos >= 0) {
           const existing = getDataSourceForImage(imagePos);
-          // 关闭右键菜单（如果有）
-          setContextMenu(null);
-          // 直接打开对应的修改面板，不显示选择菜单
-          setDataSourceMenu({
-            x: event.clientX,
-            y: event.clientY,
-            targetType: 'image',
-            imagePos,
-            existingSource: existing,
-          });
-          // 根据现有数据来源类型直接打开对应面板
-          if (existing?.type === 'api') {
-            hydrateApiForm(existing);
-            setActiveDataSourcePanel('api');
+          // 如果有数据来源（节点属性或 DOM 属性），才打开编辑面板
+          if (existing || hasDataSourceAttr) {
+            console.log('[数据来源点击] 检测到图片数据来源，打开编辑面板', {
+              imagePos,
+              hasDataSourceAttr,
+              existingType: existing?.type,
+            });
+            event.preventDefault();
+            event.stopPropagation();
+            
+            // 关闭右键菜单（如果有）
+            setContextMenu(null);
+            // 直接打开对应的修改面板，不显示选择菜单
+            setDataSourceMenu({
+              x: event.clientX,
+              y: event.clientY,
+              targetType: 'image',
+              imagePos,
+              existingSource: existing,
+            });
+            // 根据现有数据来源类型直接打开对应面板
+            if (existing?.type === 'api') {
+              hydrateApiForm(existing);
+              setActiveDataSourcePanel('api');
+            } else if (existing?.type === 'curveChart') {
+              setCurveChartConfig(existing.config);
+              setActiveDataSourcePanel('curveChart');
+            } else {
+              // 如果有数据来源但类型不是 api 或 curveChart，则打开标签面板；如果没有数据来源，也打开标签面板
+              setActiveDataSourcePanel('tag');
+            }
+            return;
           } else {
-            // 如果有数据来源但类型不是 api，则打开标签面板；如果没有数据来源，也打开标签面板
-            setActiveDataSourcePanel('tag');
+            console.log('[数据来源点击] 图片没有数据来源', { imagePos, hasDataSourceAttr });
           }
+        } else {
+          console.log('[数据来源点击] 未找到图片节点位置', { imgSrc, baseSrc });
         }
-        return;
       }
       
       const dsElement = target.closest(`[${DATA_SOURCE_ELEMENT_ATTR}]`) as HTMLElement | null;
@@ -3569,7 +3739,7 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
     return () => {
       dom.removeEventListener('click', handleDataSourceClick);
     };
-  }, [editor, getDataSourceAtRange, getDataSourceForImage, hydrateApiForm, resolveRangeFromElement]);
+  }, [editor, getDataSourceAtRange, getDataSourceForImage, hydrateApiForm, resolveRangeFromElement, setCurveChartConfig]);
 
   useEffect(() => {
     if (!editor) return;
@@ -3951,11 +4121,6 @@ const TiptapEditor = forwardRef<TiptapEditorRef, TiptapEditorProps>(({ content, 
     
     onTaskChange?.(task);
   };
-
-  // 当任务状态变化时通知父组件
-  useEffect(() => {
-    onTaskChange?.(selectedTask);
-  }, [selectedTask, onTaskChange]);
 
   // 暴露给父组件的方法
   useImperativeHandle(ref, () => ({

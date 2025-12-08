@@ -67,11 +67,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '开始时间或结束时间标签不存在' }, { status: 400 });
     }
 
-    const startTime = parseDateTime(startTimeTag.value);
-    const endTime = parseDateTime(endTimeTag.value);
+    let startTime = parseDateTime(startTimeTag.value);
+    let endTime = parseDateTime(endTimeTag.value);
 
     if (!startTime || !endTime) {
       return NextResponse.json({ error: '开始时间或结束时间格式不正确' }, { status: 400 });
+    }
+
+    // 应用偏移时间：开始时间向前偏移（减去），结束时间向后偏移（加上）
+    const startOffsetMinutes = config.startTimeOffsetMinutes || 0;
+    const endOffsetMinutes = config.endTimeOffsetMinutes || 0;
+    if (startOffsetMinutes !== 0 || endOffsetMinutes !== 0) {
+      const startOffsetMs = startOffsetMinutes * 60 * 1000;
+      const endOffsetMs = endOffsetMinutes * 60 * 1000;
+      startTime = new Date(startTime.getTime() - startOffsetMs);
+      endTime = new Date(endTime.getTime() + endOffsetMs);
     }
 
     if (startTime >= endTime) {
@@ -257,8 +267,9 @@ export async function POST(request: NextRequest) {
     ctx.fillStyle = '#1f2937';
     ctx.font = 'bold 20px Arial';
     ctx.textAlign = 'center';
+    const chartTitle = config.title?.trim() || `${config.dataType === 'temperature' ? '温度' : '湿度'}曲线图`;
     ctx.fillText(
-      `${config.dataType === 'temperature' ? '温度' : '湿度'}曲线图`,
+      chartTitle,
       width / 2,
       padding.top - 20
     );

@@ -15,6 +15,8 @@ export interface CurveLine {
   // 直线参数
   lineName?: string; // 线条名称
   lineColor?: string; // 线条颜色
+  lineValue?: number; // 固定值
+  lineNote?: string; // 线条备注
   // 通用参数
   lineWidth: number; // 线条宽度
   lineStyle: 'solid' | 'dashed' | 'dotted'; // 线条样式
@@ -23,7 +25,10 @@ export interface CurveLine {
 export interface CurveChartConfig {
   startTimeTagId: string; // 开始时间标签ID
   endTimeTagId: string; // 结束时间标签ID
+  startTimeOffsetMinutes?: number; // 开始时间偏移（分钟），向前偏移（减去）
+  endTimeOffsetMinutes?: number; // 结束时间偏移（分钟），向后偏移（加上）
   dataType: 'temperature' | 'humidity'; // 温度或湿度
+  title?: string; // 曲线图标题
   lines: CurveLine[]; // 线条配置
 }
 
@@ -50,7 +55,10 @@ export default function CurveChartConfigPanel({
     config || {
       startTimeTagId: '',
       endTimeTagId: '',
+      startTimeOffsetMinutes: 0,
+      endTimeOffsetMinutes: 0,
       dataType: 'temperature',
+      title: '',
       lines: [],
     }
   );
@@ -65,6 +73,10 @@ export default function CurveChartConfigPanel({
   const [editingLine, setEditingLine] = useState<CurveLine | null>(null);
   const [showLineForm, setShowLineForm] = useState<'curve' | 'average' | 'line' | null>(null);
   const addLineMenuRef = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [adjustedPosition, setAdjustedPosition] = useState(position);
+  const isPositionAdjustedRef = useRef(false); // 标记是否已经调整过位置
+  const adjustedPositionRef = useRef(position); // 使用 ref 存储调整后的位置，避免依赖项问题
 
   // 获取日期时间类型的标签
   const dateTimeTags = useMemo(
@@ -92,7 +104,7 @@ export default function CurveChartConfigPanel({
       lineStyle: type === 'line' ? 'dashed' : 'solid',
       ...(type === 'curve' && { locationTags: [] }),
       ...(type === 'average' && { averageLocationTags: [], averageColor: '#3b82f6' }),
-      ...(type === 'line' && { lineName: '直线1', lineColor: '#ef4444' }),
+      ...(type === 'line' && { lineName: '直线1', lineColor: '#ef4444', lineValue: 0, lineNote: '' }),
     };
     setEditingLine(newLine);
     setShowLineForm(type);
@@ -107,6 +119,12 @@ export default function CurveChartConfigPanel({
   const handleSaveLine = () => {
     if (!editingLine) return;
 
+    // 验证直线类型的固定值
+    if (editingLine.type === 'line' && (editingLine.lineValue === undefined || editingLine.lineValue === null)) {
+      alert('请填写固定值');
+      return;
+    }
+
     // 创建线条的深拷贝，确保所有属性都被正确保存
     const lineToSave: CurveLine = {
       id: editingLine.id || `line_${Date.now()}`,
@@ -120,7 +138,9 @@ export default function CurveChartConfigPanel({
       }),
       ...(editingLine.type === 'line' && { 
         lineName: editingLine.lineName || '直线1',
-        lineColor: editingLine.lineColor || '#ef4444'
+        lineColor: editingLine.lineColor || '#ef4444',
+        lineValue: editingLine.lineValue,
+        lineNote: editingLine.lineNote || ''
       }),
     };
 
@@ -171,6 +191,9 @@ export default function CurveChartConfigPanel({
       if (line.type === 'average' && (!line.averageLocationTags || line.averageLocationTags.length === 0)) {
         return '平均值曲线参数：请选择布点标签';
       }
+      if (line.type === 'line' && (line.lineValue === undefined || line.lineValue === null)) {
+        return '直线参数：请填写固定值';
+      }
       const locationValues =
         line.type === 'curve'
           ? getLocationTagValues(line.locationTags || [])
@@ -193,6 +216,127 @@ export default function CurveChartConfigPanel({
     onApply();
   };
 
+  // 自适应弹窗位置，避免超出视口
+  useEffect(() => {
+    // 如果 position 变化，重置调整标记
+    isPositionAdjustedRef.current = false;
+    adjustedPositionRef.current = position;
+    setAdjustedPosition(position);
+  }, [position]);
+
+  // 在弹窗渲染后，计算并调整位置（只执行一次）
+  useEffect(() => {
+    if (!panelRef.current || isPositionAdjustedRef.current) return;
+
+    const adjustPosition = () => {
+      if (!panelRef.current) return;
+      
+      const panel = panelRef.current;
+      const viewportHeight = window.innerHeight;
+      const viewportWidth = window.innerWidth;
+      const margin = 10; // 距离视口边缘的最小距离
+
+      // 获取弹窗的实际尺寸
+      const panelWidth = panel.offsetWidth || 500;
+      const panelHeight = panel.offsetHeight || 400;
+
+      let newTop = position.top;
+      let newLeft = position.left;
+
+      // 检查是否超出视口底部
+      const estimatedBottom = position.top + panelHeight;
+      if (estimatedBottom > viewportHeight - margin) {
+        // 向上调整，确保弹窗完全显示
+        newTop = viewportHeight - panelHeight - margin;
+        // 如果调整后超出顶部，则从顶部开始显示
+        if (newTop < margin) {
+          newTop = margin;
+        }
+      }
+
+      // 检查是否超出视口顶部
+      if (position.top < margin) {
+        newTop = margin;
+      }
+
+      // 检查是否超出视口右侧
+      const estimatedRight = position.left + panelWidth;
+      if (estimatedRight > viewportWidth - margin) {
+        newLeft = viewportWidth - panelWidth - margin;
+      }
+
+      // 检查是否超出视口左侧
+      if (position.left < margin) {
+        newLeft = margin;
+      }
+
+      // 只有当位置需要调整时才更新
+      if (newTop !== position.top || newLeft !== position.left) {
+        const newPos = { left: newLeft, top: newTop };
+        adjustedPositionRef.current = newPos;
+        setAdjustedPosition(newPos);
+      }
+      isPositionAdjustedRef.current = true;
+    };
+
+    // 使用 requestAnimationFrame 确保在 DOM 完全渲染后计算
+    const rafId = requestAnimationFrame(() => {
+      // 再延迟一帧，确保尺寸已计算
+      requestAnimationFrame(() => {
+        adjustPosition();
+      });
+    });
+
+    // 监听窗口大小变化（只在窗口大小变化时重新调整）
+    const handleResize = () => {
+      if (panelRef.current) {
+        const panel = panelRef.current;
+        const viewportHeight = window.innerHeight;
+        const viewportWidth = window.innerWidth;
+        const margin = 10;
+        const panelHeight = panel.offsetHeight || 400;
+        const panelWidth = panel.offsetWidth || 500;
+
+        const currentPos = adjustedPositionRef.current;
+        let newTop = currentPos.top;
+        let newLeft = currentPos.left;
+
+        // 检查是否需要调整
+        if (currentPos.top + panelHeight > viewportHeight - margin) {
+          newTop = viewportHeight - panelHeight - margin;
+          if (newTop < margin) newTop = margin;
+        }
+        if (currentPos.top < margin) {
+          newTop = margin;
+        }
+        if (currentPos.left + panelWidth > viewportWidth - margin) {
+          newLeft = viewportWidth - panelWidth - margin;
+        }
+        if (currentPos.left < margin) {
+          newLeft = margin;
+        }
+
+        if (newTop !== currentPos.top || newLeft !== currentPos.left) {
+          const newPos = { left: newLeft, top: newTop };
+          adjustedPositionRef.current = newPos;
+          setAdjustedPosition(newPos);
+        }
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [position]); // 只依赖 position，避免内容变化时重新计算
+
+  // 同步外部 position 的变化
+  useEffect(() => {
+    setAdjustedPosition(position);
+  }, [position]);
+
   // 点击外部关闭添加线条菜单
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -212,8 +356,9 @@ export default function CurveChartConfigPanel({
   return (
     <>
     <div
+      ref={panelRef}
       className="fixed bg-white border rounded-lg shadow-2xl w-[500px] max-h-[90vh] overflow-y-auto z-50 data-source-popover"
-      style={position}
+      style={adjustedPosition}
       onClick={(e) => e.stopPropagation()}
     >
       <div className="sticky top-0 bg-white border-b px-4 py-3 flex items-center justify-between z-10">
@@ -235,24 +380,56 @@ export default function CurveChartConfigPanel({
           </div>
         )}
 
+        {/* 曲线图标题 */}
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">曲线图标题</label>
+          <input
+            type="text"
+            value={localConfig.title || ''}
+            onChange={(e) => updateConfig({ title: e.target.value })}
+            className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+            disabled={!selectedTaskId}
+            placeholder={`${localConfig.dataType === 'temperature' ? '温度' : '湿度'}曲线图`}
+          />
+          <p className="text-xs text-gray-400 mt-1">留空则使用默认标题</p>
+        </div>
         {/* 开始时间标签 */}
         <div>
           <label className="block text-xs text-gray-500 mb-1">
             选择开始时间 <span className="text-red-500">*</span>
           </label>
-          <select
-            value={localConfig.startTimeTagId}
-            onChange={(e) => updateConfig({ startTimeTagId: e.target.value })}
-            className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-            disabled={!selectedTaskId}
-          >
-            <option value="">请选择标签（类型为日期、时间）</option>
-            {dateTimeTags.map((tag) => (
-              <option key={tag._id} value={tag._id}>
-                {tag.name} ({tag.type === 'date' ? '日期' : '时间'})
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center space-x-2">
+            <select
+              value={localConfig.startTimeTagId}
+              onChange={(e) => updateConfig({ startTimeTagId: e.target.value })}
+              className="flex-1 px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+              disabled={!selectedTaskId}
+            >
+              <option value="">请选择标签（类型为日期、时间）</option>
+              {dateTimeTags.map((tag) => (
+                <option key={tag._id} value={tag._id}>
+                  {tag.name} ({tag.type === 'date' ? '日期' : '时间'})
+                </option>
+              ))}
+            </select>
+            <div className="flex items-center space-x-1 w-32">
+              <label className="text-xs text-gray-500 whitespace-nowrap">偏移（分钟）</label>
+              <input
+                type="number"
+                step="1"
+                value={localConfig.startTimeOffsetMinutes !== undefined ? localConfig.startTimeOffsetMinutes : 0}
+                onChange={(e) => {
+                  const value = e.target.value === '' ? 0 : parseInt(e.target.value);
+                  updateConfig({ startTimeOffsetMinutes: isNaN(value) ? 0 : value });
+                }}
+                className="w-16 px-2 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                disabled={!selectedTaskId}
+                placeholder="0"
+                title="向前偏移（减去）"
+              />
+            </div>
+          </div>
+          <p className="text-xs text-gray-400 mt-1">开始时间向前偏移（减去）</p>
         </div>
 
         {/* 结束时间标签 */}
@@ -260,19 +437,38 @@ export default function CurveChartConfigPanel({
           <label className="block text-xs text-gray-500 mb-1">
             选择结束时间 <span className="text-red-500">*</span>
           </label>
-          <select
-            value={localConfig.endTimeTagId}
-            onChange={(e) => updateConfig({ endTimeTagId: e.target.value })}
-            className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-            disabled={!selectedTaskId}
-          >
-            <option value="">请选择标签（类型为日期、时间）</option>
-            {dateTimeTags.map((tag) => (
-              <option key={tag._id} value={tag._id}>
-                {tag.name} ({tag.type === 'date' ? '日期' : '时间'})
-              </option>
-            ))}
-          </select>
+          <div className="flex items-center space-x-2">
+            <select
+              value={localConfig.endTimeTagId}
+              onChange={(e) => updateConfig({ endTimeTagId: e.target.value })}
+              className="flex-1 px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+              disabled={!selectedTaskId}
+            >
+              <option value="">请选择标签（类型为日期、时间）</option>
+              {dateTimeTags.map((tag) => (
+                <option key={tag._id} value={tag._id}>
+                  {tag.name} ({tag.type === 'date' ? '日期' : '时间'})
+                </option>
+              ))}
+            </select>
+            <div className="flex items-center space-x-1 w-32">
+              <label className="text-xs text-gray-500 whitespace-nowrap">偏移（分钟）</label>
+              <input
+                type="number"
+                step="1"
+                value={localConfig.endTimeOffsetMinutes !== undefined ? localConfig.endTimeOffsetMinutes : 0}
+                onChange={(e) => {
+                  const value = e.target.value === '' ? 0 : parseInt(e.target.value);
+                  updateConfig({ endTimeOffsetMinutes: isNaN(value) ? 0 : value });
+                }}
+                className="w-16 px-2 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                disabled={!selectedTaskId}
+                placeholder="0"
+                title="向后偏移（加上）"
+              />
+            </div>
+          </div>
+          <p className="text-xs text-gray-400 mt-1">结束时间向后偏移（加上）</p>
         </div>
 
         {/* 温度、湿度选择 */}
@@ -305,6 +501,7 @@ export default function CurveChartConfigPanel({
             </button>
           </div>
         </div>
+
 
         {/* 线条列表 */}
         <div>
@@ -448,6 +645,8 @@ export default function CurveChartConfigPanel({
                       <>
                         <p>名称：{line.lineName}</p>
                         <p>颜色：{line.lineColor}</p>
+                        <p>固定值：{line.lineValue !== undefined ? line.lineValue : '未设置'}</p>
+                        {line.lineNote && <p>备注：{line.lineNote}</p>}
                       </>
                     )}
                     <p>
@@ -700,10 +899,42 @@ export default function CurveChartConfigPanel({
               <>
                 <div>
                 <label className="block text-xs text-gray-500 mb-1">线条名称</label>
+                <div className="flex items-center space-x-2">
+                  <input
+                    type="text"
+                    value={editingLine.lineName || '直线1'}
+                    onChange={(e) => setEditingLine({ ...editingLine, lineName: e.target.value })}
+                    className="flex-1 px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setEditingLine({ ...editingLine, lineName: '上限' })}
+                    className="px-3 py-2 text-sm border rounded text-gray-700 hover:bg-gray-50 whitespace-nowrap"
+                  >
+                    上限
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingLine({ ...editingLine, lineName: '下限' })}
+                    className="px-3 py-2 text-sm border rounded text-gray-700 hover:bg-gray-50 whitespace-nowrap"
+                  >
+                    下限
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">
+                  固定值 <span className="text-red-500">*</span>
+                </label>
                 <input
-                  type="text"
-                  value={editingLine.lineName || '直线1'}
-                  onChange={(e) => setEditingLine({ ...editingLine, lineName: e.target.value })}
+                  type="number"
+                  step="0.1"
+                  required
+                  value={editingLine.lineValue !== undefined ? editingLine.lineValue : ''}
+                  onChange={(e) => {
+                    const value = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                    setEditingLine({ ...editingLine, lineValue: isNaN(value as number) ? undefined : value });
+                  }}
                   className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
                 />
               </div>
@@ -753,6 +984,17 @@ export default function CurveChartConfigPanel({
                   <option value="dashed">虚线</option>
                   <option value="dotted">点线</option>
                 </select>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">线条备注</label>
+                <input
+                  type="text"
+                  value={editingLine.lineNote || ''}
+                  onChange={(e) => setEditingLine({ ...editingLine, lineNote: e.target.value })}
+                  className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                  placeholder={`${editingLine.lineName || '直线1'}${editingLine.lineValue !== undefined ? ` ${editingLine.lineValue}` : ''}`}
+                />
+                <p className="text-xs text-gray-400 mt-1">留空则使用默认值：线条名称+固定值</p>
               </div>
             </>
             )}

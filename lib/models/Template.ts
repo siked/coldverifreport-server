@@ -17,6 +17,7 @@ export interface Template {
   userId: string;
   tags?: TemplateTag[];
   locations?: string; // 布点区域，用 | 分割
+  taskId?: string; // 关联的任务ID
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -64,7 +65,8 @@ export async function updateTemplate(
   content: string,
   userId: string,
   tags?: TemplateTag[],
-  locations?: string
+  locations?: string,
+  taskId?: string
 ): Promise<boolean> {
   const client = await clientPromise;
   const db = client.db();
@@ -82,6 +84,10 @@ export async function updateTemplate(
 
   if (locations !== undefined) {
     updateData.locations = locations;
+  }
+
+  if (taskId !== undefined) {
+    updateData.taskId = taskId;
   }
 
   const result = await templates.updateOne(

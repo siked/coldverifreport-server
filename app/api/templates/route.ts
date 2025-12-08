@@ -66,13 +66,13 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: '未登录' }, { status: 401 });
     }
 
-    const { id, name, content, tags, locations } = await request.json();
+    const { id, name, content, tags, locations, taskId } = await request.json();
 
     if (!id || !name) {
       return NextResponse.json({ error: 'ID和名称不能为空' }, { status: 400 });
     }
 
-    const success = await updateTemplate(id, name, content || '', user.userId, tags, locations);
+    const success = await updateTemplate(id, name, content || '', user.userId, tags, locations, taskId);
     if (!success) {
       return NextResponse.json({ error: '更新失败' }, { status: 400 });
     }

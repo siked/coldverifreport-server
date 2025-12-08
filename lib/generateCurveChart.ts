@@ -154,8 +154,8 @@ export async function generateCurveChart(
     throw new Error('开始时间或结束时间标签不存在');
   }
 
-  const startTime = parseDateTime(startTimeTag.value);
-  const endTime = parseDateTime(endTimeTag.value);
+  let startTime = parseDateTime(startTimeTag.value);
+  let endTime = parseDateTime(endTimeTag.value);
 
   console.log('[曲线图生成] 时间解析:', {
     startTimeTagValue: startTimeTag.value,
@@ -167,6 +167,31 @@ export async function generateCurveChart(
   if (!startTime || !endTime) {
     throw new Error(`开始时间或结束时间格式不正确。开始时间: "${startTimeTag.value}", 结束时间: "${endTimeTag.value}"`);
   }
+
+  // 应用偏移时间：开始时间向前偏移（减去），结束时间向后偏移（加上）
+  const startOffsetMinutes = config.startTimeOffsetMinutes || 0;
+  const endOffsetMinutes = config.endTimeOffsetMinutes || 0;
+  if (startOffsetMinutes !== 0 || endOffsetMinutes !== 0) {
+    const startOffsetMs = startOffsetMinutes * 60 * 1000;
+    const endOffsetMs = endOffsetMinutes * 60 * 1000;
+    startTime = new Date(startTime.getTime() - startOffsetMs);
+    endTime = new Date(endTime.getTime() + endOffsetMs);
+    console.log('[曲线图生成] 应用偏移时间:', {
+      startOffsetMinutes,
+      endOffsetMinutes,
+      startTimeBefore: parseDateTime(startTimeTag.value)?.toISOString(),
+      startTimeAfter: startTime.toISOString(),
+      endTimeBefore: parseDateTime(endTimeTag.value)?.toISOString(),
+      endTimeAfter: endTime.toISOString(),
+    });
+  }
+
+  // 结束时间强制加1分钟（不包含偏移）
+  endTime = new Date(endTime.getTime() + 60 * 1000);
+  console.log('[曲线图生成] 结束时间强制加1分钟:', {
+    endTimeBefore: parseDateTime(endTimeTag.value)?.toISOString(),
+    endTimeAfter: endTime.toISOString(),
+  });
 
   if (startTime >= endTime) {
     throw new Error(`开始时间必须早于结束时间。开始时间: ${startTime.toISOString()}, 结束时间: ${endTime.toISOString()}`);
@@ -357,6 +382,8 @@ export async function generateCurveChart(
       borderWidth: number;
       borderDash: number[];
       locationValues?: string[];
+      lineNote?: string; // 直线备注
+      lineType?: 'curve' | 'average' | 'line'; // 线条类型
     }>;
   } = {
     labels: [],
@@ -420,16 +447,15 @@ export async function generateCurveChart(
       // 为每个独立的曲线创建数据
       for (const curveValue of uniqueCurves) {
         // 对每个时间点，收集该曲线的数据
-        const timeGroups = new Map<number, { values: number[]; timestamp: Date }>();
+        const timeGroups = new Map<number, { values: number[]; originalTimestamp: Date | string | number }>();
         
         sortedData.forEach((item) => {
           if (item.deviceId === curveValue) {
             const time = getTimestampMs(item.timestamp);
-            const timestamp = getTimestampDate(item.timestamp);
             const value = config.dataType === 'temperature' ? item.temperature : item.humidity;
             
             if (!timeGroups.has(time)) {
-              timeGroups.set(time, { values: [], timestamp });
+              timeGroups.set(time, { values: [], originalTimestamp: item.timestamp });
             }
             timeGroups.get(time)!.values.push(value);
           }
@@ -443,7 +469,17 @@ export async function generateCurveChart(
           .sort(([a], [b]) => a - b)
           .forEach(([time, group]) => {
             const avg = group.values.reduce((sum, v) => sum + v, 0) / group.values.length;
-            timestamps.push(group.timestamp.toISOString());
+            // 数据存储的时间戳是UTC+8（本地时间），直接使用，不需要转换为ISO字符串
+            // 因为后续显示时会直接使用这个时间戳
+            let originalTime: number;
+            if (typeof group.originalTimestamp === 'number') {
+              originalTime = group.originalTimestamp;
+            } else if (typeof group.originalTimestamp === 'string') {
+              originalTime = new Date(group.originalTimestamp).getTime();
+            } else {
+              originalTime = group.originalTimestamp.getTime();
+            }
+            timestamps.push(originalTime.toString());
             lineData.push(avg);
           });
 
@@ -483,7 +519,7 @@ export async function generateCurveChart(
         }
       }
     } else if (line.type === 'average') {
-      // 平均值曲线：计算所有匹配布点的平均值
+      // 平均值曲线：将所有选中的布点标签按照时间聚合，计算平均值，生成一条线
       const locationValues = getLocationValues(line.averageLocationTags || [], tags);
       console.log('[曲线图生成] 处理平均值曲线:', {
         lineType: 'average',
@@ -498,117 +534,154 @@ export async function generateCurveChart(
         continue;
       }
 
-      // 将 locationValues 按 | 分割，为每个值创建独立的曲线
-      const individualCurves: string[] = [];
+      // 将 locationValues 按 | 分割，获取所有布点值
+      const allDeviceIds: string[] = [];
       locationValues.forEach(value => {
         // 如果值包含 |，则分割
         if (value.includes('|')) {
-          individualCurves.push(...value.split('|').map(v => v.trim()).filter(v => v));
+          allDeviceIds.push(...value.split('|').map(v => v.trim()).filter(v => v));
         } else {
-          individualCurves.push(value.trim());
+          allDeviceIds.push(value.trim());
         }
       });
 
-      // 去重
-      const uniqueCurves = Array.from(new Set(individualCurves));
+      // 去重，获取所有需要参与计算的布点
+      const uniqueDeviceIds = Array.from(new Set(allDeviceIds));
 
       const sortedData = [...filteredData].sort(
         (a, b) => getTimestampMs(a.timestamp) - getTimestampMs(b.timestamp)
       );
 
-      // 为每个独立的曲线创建数据
-      for (const curveValue of uniqueCurves) {
-        const timeGroups = new Map<number, { values: number[]; timestamp: Date }>();
-        
-        sortedData.forEach((item) => {
-          if (item.deviceId === curveValue) {
-            const time = getTimestampMs(item.timestamp);
-            const timestamp = getTimestampDate(item.timestamp);
-            const value = config.dataType === 'temperature' ? item.temperature : item.humidity;
-            
-            if (!timeGroups.has(time)) {
-              timeGroups.set(time, { values: [], timestamp });
-            }
-            timeGroups.get(time)!.values.push(value);
+      // 按时间聚合，计算所有匹配布点的平均值
+      const timeGroups = new Map<number, { values: number[]; originalTimestamp: Date | string | number }>();
+      
+      sortedData.forEach((item) => {
+        // 如果该数据点的设备ID在选中的布点列表中
+        if (uniqueDeviceIds.includes(item.deviceId)) {
+          const time = getTimestampMs(item.timestamp);
+          const value = config.dataType === 'temperature' ? item.temperature : item.humidity;
+          
+          if (!timeGroups.has(time)) {
+            timeGroups.set(time, { values: [], originalTimestamp: item.timestamp });
           }
+          timeGroups.get(time)!.values.push(value);
+        }
+      });
+
+      const lineData: number[] = [];
+      const timestamps: string[] = [];
+
+      Array.from(timeGroups.entries())
+        .sort(([a], [b]) => a - b)
+        .forEach(([time, group]) => {
+          // 计算该时间点所有匹配布点的平均值
+          const avg = group.values.reduce((sum, v) => sum + v, 0) / group.values.length;
+          // 数据存储的时间戳是UTC+8（本地时间），直接使用，不需要转换为ISO字符串
+          // 因为后续显示时会直接使用这个时间戳
+          let originalTime: number;
+          if (typeof group.originalTimestamp === 'number') {
+            originalTime = group.originalTimestamp;
+          } else if (typeof group.originalTimestamp === 'string') {
+            originalTime = new Date(group.originalTimestamp).getTime();
+          } else {
+            originalTime = group.originalTimestamp.getTime();
+          }
+          timestamps.push(originalTime.toString());
+          lineData.push(avg);
         });
 
-        const lineData: number[] = [];
-        const timestamps: string[] = [];
+      if (lineData.length > 0) {
+        // 为平均值曲线分配颜色
+        const curveColor = line.averageColor || colorPalette[colorIndex % colorPalette.length];
+        colorIndex++;
 
-        Array.from(timeGroups.entries())
-          .sort(([a], [b]) => a - b)
-          .forEach(([time, group]) => {
-            const avg = group.values.reduce((sum, v) => sum + v, 0) / group.values.length;
-            timestamps.push(group.timestamp.toISOString());
-            lineData.push(avg);
-          });
-
-        if (lineData.length > 0) {
-          // 为每条曲线分配颜色
-          const curveColor = line.averageColor || colorPalette[colorIndex % colorPalette.length];
-          colorIndex++;
-
-          console.log('[曲线图生成] 平均值曲线数据生成成功:', {
-            lineType: 'average',
-            curveValue: curveValue,
-            dataPointCount: lineData.length,
-            dataRange: {
-              min: Math.min(...lineData).toFixed(2),
-              max: Math.max(...lineData).toFixed(2),
-              avg: (lineData.reduce((a, b) => a + b, 0) / lineData.length).toFixed(2),
-            },
-          });
-          if (chartData.labels.length === 0) {
-            chartData.labels = timestamps;
-          }
-          chartData.datasets.push({
-            label: `平均值 (${curveValue})`,
-            data: lineData,
-            borderColor: curveColor,
-            borderWidth: line.lineWidth || 2,
-            borderDash: line.lineStyle === 'dashed' ? [5, 5] : line.lineStyle === 'dotted' ? [2, 2] : [],
-            locationValues: [curveValue],
-          });
-        } else {
-          console.warn('[曲线图生成] 警告: 平均值曲线没有生成数据', {
-            lineType: 'average',
-            curveValue: curveValue,
-            filteredDataCount: filteredData.length,
-            matchedDeviceDataCount: filteredData.filter(item => item.deviceId === curveValue).length,
-          });
+        console.log('[曲线图生成] 平均值曲线数据生成成功:', {
+          lineType: 'average',
+          deviceIds: uniqueDeviceIds,
+          dataPointCount: lineData.length,
+          dataRange: {
+            min: Math.min(...lineData).toFixed(2),
+            max: Math.max(...lineData).toFixed(2),
+            avg: (lineData.reduce((a, b) => a + b, 0) / lineData.length).toFixed(2),
+          },
+        });
+        if (chartData.labels.length === 0) {
+          chartData.labels = timestamps;
         }
+        chartData.datasets.push({
+          label: '平均值',
+          data: lineData,
+          borderColor: curveColor,
+          borderWidth: line.lineWidth || 2,
+          borderDash: line.lineStyle === 'dashed' ? [5, 5] : line.lineStyle === 'dotted' ? [2, 2] : [],
+          locationValues: uniqueDeviceIds,
+        });
+      } else {
+        console.warn('[曲线图生成] 警告: 平均值曲线没有生成数据', {
+          lineType: 'average',
+          deviceIds: uniqueDeviceIds,
+          filteredDataCount: filteredData.length,
+          matchedDeviceDataCount: filteredData.filter(item => uniqueDeviceIds.includes(item.deviceId)).length,
+        });
       }
     } else if (line.type === 'line') {
       // 直线：使用固定值
-      const allValues = filteredData.map(
-        (item) => (config.dataType === 'temperature' ? item.temperature : item.humidity)
-      );
-      const minValue = Math.min(...allValues);
-      const maxValue = Math.max(...allValues);
-      const avgValue = (minValue + maxValue) / 2;
+      if (line.lineValue === undefined || line.lineValue === null) {
+        console.error('[曲线图生成] 错误: 直线固定值未设置', {
+          lineId: line.id,
+          lineName: line.lineName,
+        });
+        throw new Error(`直线"${line.lineName || '未命名'}"的固定值未设置`);
+      }
+      
+      const fixedValue = line.lineValue;
 
       const sortedData = [...filteredData].sort(
         (a, b) => getTimestampMs(a.timestamp) - getTimestampMs(b.timestamp)
       );
+      // 获取唯一的时间戳（使用原始时间戳，不经过时区转换）
       const uniqueTimes = Array.from(
-        new Set(sortedData.map((item) => getTimestampMs(item.timestamp)))
+        new Set(sortedData.map((item) => {
+          if (typeof item.timestamp === 'number') {
+            return item.timestamp;
+          } else if (typeof item.timestamp === 'string') {
+            return new Date(item.timestamp).getTime();
+          } else {
+            return item.timestamp.getTime();
+          }
+        }))
       ).sort();
 
       if (chartData.labels.length === 0) {
-        chartData.labels = uniqueTimes.map((time) => new Date(time).toISOString());
+        // 数据存储的时间戳是UTC+8（本地时间），直接使用，不需要转换为ISO字符串
+        chartData.labels = uniqueTimes.map((time) => time.toString());
       }
 
       // 为直线分配颜色
       const lineColor = line.lineColor || colorPalette[colorIndex % colorPalette.length];
       colorIndex++;
 
+      // 获取备注内容，如果未设置或为空则使用默认值：线条名称+固定值
+      const lineNote = line.lineNote && line.lineNote.trim() !== '' 
+        ? line.lineNote 
+        : `${line.lineName || '直线'} ${fixedValue}`;
+
+      console.log('[曲线图生成] 直线数据生成成功:', {
+        lineType: 'line',
+        lineName: line.lineName || '直线',
+        fixedValue: fixedValue,
+        dataPointCount: uniqueTimes.length,
+        lineNote: lineNote,
+      });
+
       chartData.datasets.push({
         label: line.lineName || '直线',
-        data: new Array(uniqueTimes.length).fill(avgValue),
+        data: new Array(uniqueTimes.length).fill(fixedValue),
         borderColor: lineColor,
         borderWidth: line.lineWidth || 2,
         borderDash: line.lineStyle === 'dashed' ? [5, 5] : line.lineStyle === 'dotted' ? [2, 2] : [],
+        lineType: 'line',
+        lineNote: lineNote,
       });
     }
   }
@@ -633,11 +706,17 @@ export async function generateCurveChart(
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, width, height);
 
-  // 设置边距（底部增加空间用于图例，但更紧凑）
-  const legendColsForPadding = 6; // 每行6个图例，更紧凑
-  const legendRowsForPadding = Math.ceil(chartData.datasets.length / legendColsForPadding);
-  const legendHeight = legendRowsForPadding * 20 + 10; // 每个图例20px高度，更紧凑
-  const padding = { top: 70, right: 80, bottom: 60 + legendHeight, left: 90 };
+  // 设置边距（最小边距）
+  // 估算自适应列数以计算padding（基于可用宽度）
+  const rightPadding = 20; // 右边距减小，让图表更靠右
+  const leftPadding = 50;
+  const minLegendItemWidth = 60; // 最小图例项宽度（用于padding和图例计算）
+  const estimatedAvailableWidth = width - leftPadding - rightPadding; // 估算可用宽度
+  const maxEstimatedLegendCols = Math.max(1, Math.floor(estimatedAvailableWidth / minLegendItemWidth));
+  const estimatedLegendCols = Math.min(maxEstimatedLegendCols, chartData.datasets.length); // 列数不超过数据集数量
+  const legendRowsForPadding = Math.ceil(chartData.datasets.length / estimatedLegendCols);
+  const legendHeight = legendRowsForPadding * 22 + 10; // 每个图例22px高度，适应更大的字体
+  const padding = { top: 40, right: rightPadding, bottom: 30 + legendHeight, left: leftPadding };
   const chartWidth = width - padding.left - padding.right;
   const chartHeight = height - padding.top - padding.bottom;
 
@@ -645,10 +724,11 @@ export async function generateCurveChart(
   ctx.fillStyle = '#1f2937';
   ctx.font = 'bold 24px Arial';
   ctx.textAlign = 'center';
+  const chartTitle = config.title?.trim() || `${config.dataType === 'temperature' ? '温度' : '湿度'}曲线图`;
   ctx.fillText(
-    `${config.dataType === 'temperature' ? '温度' : '湿度'}曲线图`,
+    chartTitle,
     width / 2,
-    padding.top - 30
+    padding.top - 20
   );
 
   // 计算数据范围
@@ -663,7 +743,10 @@ export async function generateCurveChart(
         minValue = Math.min(minValue, value);
         maxValue = Math.max(maxValue, value);
       }
-      const time = new Date(chartData.labels[index]).getTime();
+      // 标签存储的是时间戳字符串，直接解析为数字
+      const time = typeof chartData.labels[index] === 'string' 
+        ? parseInt(chartData.labels[index], 10)
+        : new Date(chartData.labels[index]).getTime();
       if (!isNaN(time)) {
         minTime = Math.min(minTime, time);
         maxTime = Math.max(maxTime, time);
@@ -697,11 +780,11 @@ export async function generateCurveChart(
   ctx.stroke();
 
   // 绘制Y轴标签和刻度线（使用虚线，字体更大）
-  ctx.fillStyle = '#6b7280';
+  ctx.fillStyle = '#000000';
   ctx.font = '14px Arial';
   ctx.textAlign = 'right';
   ctx.textBaseline = 'middle';
-  const ySteps = 8; // 增加Y轴刻度数量
+  const ySteps = 16; // 增加Y轴刻度数量，更细化
   ctx.strokeStyle = '#d1d5db';
   ctx.lineWidth = 1;
   ctx.setLineDash([3, 3]); // 虚线
@@ -717,27 +800,24 @@ export async function generateCurveChart(
     ctx.stroke();
     
     // 绘制标签
-    ctx.fillText(value.toFixed(1), padding.left - 15, y);
+    ctx.fillText(value.toFixed(1), padding.left - 10, y);
   }
   
   ctx.setLineDash([]); // 恢复实线
 
-  // 绘制Y轴标题（字体更大）
-  ctx.save();
-  ctx.translate(25, height / 2);
-  ctx.rotate(-Math.PI / 2);
-  ctx.textAlign = 'center';
+  // 绘制Y轴标题（放在左上方）
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
   ctx.font = 'bold 16px Arial';
-  ctx.fillStyle = '#374151';
+  ctx.fillStyle = '#000000';
   ctx.fillText(
     config.dataType === 'temperature' ? '温度 (°C)' : '湿度 (%)',
-    0,
-    0
+    padding.left + 5,
+    padding.top - 20
   );
-  ctx.restore();
 
-  // 绘制X轴标签（时间，更细化，包含年份）
-  ctx.fillStyle = '#6b7280';
+  // 绘制X轴标签（时间，格式：月/日 时:分）
+  ctx.fillStyle = '#000000';
   ctx.font = '13px Arial';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
@@ -745,13 +825,103 @@ export async function generateCurveChart(
   ctx.lineWidth = 1;
   ctx.setLineDash([3, 3]); // 虚线
   
-  // 增加X轴刻度数量，更细化
-  const xSteps = Math.min(20, chartData.labels.length); // 从10增加到20
-  for (let i = 0; i < xSteps; i++) {
-    const index = Math.floor((chartData.labels.length - 1) * (i / (xSteps - 1)));
-    const time = new Date(chartData.labels[index]).getTime();
-    const x = padding.left + (chartWidth * i) / (xSteps - 1);
-    const date = new Date(time);
+  // 确保开始和结束时间在X轴上显示
+  // 计算需要显示的刻度点，确保第一个和最后一个总是包含，并避免文本重叠
+  const timeLabelWidth = 60; // 时间标签的大致宽度（像素），两行显示"12/25"和"14:30"，每行更短
+  const minLabelSpacing = timeLabelWidth; // 最小标签间距
+  const maxXSteps = Math.floor(chartWidth / minLabelSpacing); // 根据可用空间计算最大刻度数
+  const xSteps = Math.min(maxXSteps, chartData.labels.length);
+  
+  const indicesToShow: number[] = [];
+  
+  // 总是包含第一个（开始时间）
+  indicesToShow.push(0);
+  
+  // 添加中间的时间点，确保不会重叠
+  if (xSteps > 2 && chartData.labels.length > 1) {
+    for (let i = 1; i < xSteps - 1; i++) {
+      const index = Math.floor((chartData.labels.length - 1) * (i / (xSteps - 1)));
+      // 避免重复
+      if (index !== 0 && index !== chartData.labels.length - 1 && !indicesToShow.includes(index)) {
+        indicesToShow.push(index);
+      }
+    }
+  }
+  
+  // 总是包含最后一个（结束时间）
+  if (chartData.labels.length > 1) {
+    indicesToShow.push(chartData.labels.length - 1);
+  }
+  
+  // 对索引排序
+  indicesToShow.sort((a, b) => a - b);
+  
+  // 进一步过滤，确保相邻标签不会重叠
+  const finalIndicesToShow: number[] = [];
+  let lastX = -Infinity;
+  
+  indicesToShow.forEach((index) => {
+    // 标签存储的是时间戳字符串，直接解析为数字
+    const time = typeof chartData.labels[index] === 'string' 
+      ? parseInt(chartData.labels[index], 10)
+      : new Date(chartData.labels[index]).getTime();
+    
+    if (isNaN(time)) {
+      console.warn('[曲线图生成] 无效的时间戳:', chartData.labels[index]);
+      return;
+    }
+    
+    const x = padding.left + ((time - minTime) / timeRange) * chartWidth;
+    
+    // 检查与上一个标签的距离是否足够
+    if (x - lastX >= minLabelSpacing || finalIndicesToShow.length === 0) {
+      finalIndicesToShow.push(index);
+      lastX = x;
+    }
+  });
+  
+  // 确保开始和结束时间总是显示
+  const hasStart = finalIndicesToShow.includes(0);
+  const lastIndex = chartData.labels.length - 1;
+  const hasEnd = finalIndicesToShow.includes(lastIndex);
+  
+  if (!hasStart) {
+    finalIndicesToShow.unshift(0);
+  }
+  if (!hasEnd && chartData.labels.length > 1) {
+    finalIndicesToShow.push(lastIndex);
+  }
+  
+  // 对最终结果排序
+  finalIndicesToShow.sort((a, b) => a - b);
+  
+  // 如果中间刻度太少（只有开始和结束），添加一些均匀分布的中间刻度
+  if (finalIndicesToShow.length <= 2 && chartData.labels.length > 2) {
+    const middleCount = Math.min(3, Math.floor(chartWidth / minLabelSpacing) - 2);
+    if (middleCount > 0) {
+      const middleIndices: number[] = [];
+      for (let i = 1; i <= middleCount; i++) {
+        const ratio = i / (middleCount + 1);
+        const index = Math.floor((chartData.labels.length - 1) * ratio);
+        if (index > 0 && index < lastIndex && !finalIndicesToShow.includes(index)) {
+          middleIndices.push(index);
+        }
+      }
+      // 将中间刻度插入到正确位置
+      finalIndicesToShow.push(...middleIndices);
+      finalIndicesToShow.sort((a, b) => a - b);
+    }
+  }
+  
+  // 绘制X轴刻度和标签
+  finalIndicesToShow.forEach((index) => {
+    // 标签存储的是时间戳字符串，直接解析为数字
+    const time = typeof chartData.labels[index] === 'string' 
+      ? parseInt(chartData.labels[index], 10)
+      : new Date(chartData.labels[index]).getTime();
+    const x = padding.left + ((time - minTime) / timeRange) * chartWidth;
+    // 数据存储的时间戳是UTC+8，显示时需要减去8小时偏移
+    const date = new Date(time - TIMEZONE_OFFSET_MS);
     
     // 绘制虚线刻度线
     ctx.beginPath();
@@ -759,23 +929,21 @@ export async function generateCurveChart(
     ctx.lineTo(x, height - padding.bottom);
     ctx.stroke();
     
-    // 格式化时间，包含年份
-    const year = date.getFullYear();
+    // 格式化时间，格式：月/日 换行 时:分
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
     const hours = String(date.getHours()).padStart(2, '0');
     const minutes = String(date.getMinutes()).padStart(2, '0');
-    const timeStr = `${year}-${month}-${day} ${hours}:${minutes}`;
-    ctx.fillText(timeStr, x, height - padding.bottom + 12);
-  }
+    const dateStr = `${month}/${day}`;
+    const timeStr = `${hours}:${minutes}`;
+    
+    // 绘制日期（第一行）
+    ctx.fillText(dateStr, x, height - padding.bottom + 8);
+    // 绘制时间（第二行）
+    ctx.fillText(timeStr, x, height - padding.bottom + 22);
+  });
   
   ctx.setLineDash([]); // 恢复实线
-
-  // 绘制X轴标题（字体更大）
-  ctx.textAlign = 'center';
-  ctx.font = 'bold 16px Arial';
-  ctx.fillStyle = '#374151';
-  ctx.fillText('时间', width / 2, height - padding.bottom + 35);
 
   // 先绘制所有线条（更粗，更清晰）
   chartData.datasets.forEach((dataset) => {
@@ -786,7 +954,10 @@ export async function generateCurveChart(
     ctx.beginPath();
     dataset.data.forEach((value, dataIndex) => {
       if (typeof value === 'number' && !isNaN(value)) {
-        const time = new Date(chartData.labels[dataIndex]).getTime();
+        // 标签存储的是时间戳字符串，直接解析为数字
+        const time = typeof chartData.labels[dataIndex] === 'string' 
+          ? parseInt(chartData.labels[dataIndex], 10)
+          : new Date(chartData.labels[dataIndex]).getTime();
         const x = padding.left + ((time - minTime) / timeRange) * chartWidth;
         const y = height - padding.bottom - ((value - adjustedMinValue) / adjustedValueRange) * chartHeight;
 
@@ -801,13 +972,140 @@ export async function generateCurveChart(
     ctx.setLineDash([]);
   });
 
-  // 绘制图例（在图表下方，从左往右排列，更紧凑）
-  const legendStartY = height - padding.bottom + 50;
-  const legendItemWidth = 160; // 每个图例项的宽度，更紧凑
-  const legendItemHeight = 20; // 每个图例项的高度，更紧凑
-  const legendCols = 6; // 每行6个图例，更紧凑
+  // 绘制直线备注（显示在右上角）
+  chartData.datasets.forEach((dataset) => {
+    if (dataset.lineType === 'line' && dataset.lineNote) {
+      // 获取直线的最后一个数据点（最右边）
+      if (dataset.data.length > 0 && chartData.labels.length > 0) {
+        const lastIndex = dataset.data.length - 1;
+        const lastTime = typeof chartData.labels[lastIndex] === 'string' 
+          ? parseInt(chartData.labels[lastIndex], 10)
+          : new Date(chartData.labels[lastIndex]).getTime();
+        const lastValue = dataset.data[lastIndex];
+        
+        if (!isNaN(lastTime) && typeof lastValue === 'number' && !isNaN(lastValue)) {
+          const x = padding.left + ((lastTime - minTime) / timeRange) * chartWidth;
+          const y = height - padding.bottom - ((lastValue - adjustedMinValue) / adjustedValueRange) * chartHeight;
+          
+          // 在右上角绘制备注（x向右偏移，y向上偏移）
+          ctx.fillStyle = dataset.borderColor || '#ef4444';
+          ctx.font = 'bold 12px Arial';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'bottom';
+          
+          // 计算文本宽度，用于背景框
+          const textMetrics = ctx.measureText(dataset.lineNote);
+          const textWidth = textMetrics.width;
+          const textHeight = 16;
+          const paddingX = 6;
+          const paddingY = 4;
+          const offsetX = 8; // 从数据点向右的偏移
+          const offsetY = 2; // 从数据点向上的偏移
+          
+          // 计算备注框的位置
+          let noteX = x + offsetX;
+          let noteY = y - textHeight - paddingY * 2 - offsetY;
+          
+          // 检查右边界：如果超出，则向左调整
+          const noteBoxWidth = textWidth + paddingX * 2;
+          if (noteX + noteBoxWidth > width - padding.right) {
+            noteX = width - padding.right - noteBoxWidth;
+          }
+          
+          // 检查左边界：确保不超出左边界
+          if (noteX < padding.left) {
+            noteX = padding.left;
+            // 如果仍然超出，则截断文本
+            const maxWidth = width - padding.right - padding.left - paddingX * 2;
+            if (maxWidth > 0) {
+              // 截断文本以适应可用宽度
+              let truncatedText = dataset.lineNote;
+              while (ctx.measureText(truncatedText).width > maxWidth && truncatedText.length > 0) {
+                truncatedText = truncatedText.slice(0, -1);
+              }
+              if (truncatedText.length < dataset.lineNote.length) {
+                truncatedText = truncatedText.slice(0, -3) + '...';
+              }
+              // 重新计算宽度
+              const truncatedWidth = ctx.measureText(truncatedText).width;
+              
+              // 绘制背景框（半透明白色背景）
+              ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+              ctx.fillRect(
+                noteX,
+                noteY,
+                truncatedWidth + paddingX * 2,
+                textHeight + paddingY * 2
+              );
+              
+              // 绘制边框
+              ctx.strokeStyle = dataset.borderColor || '#ef4444';
+              ctx.lineWidth = 1;
+              ctx.strokeRect(
+                noteX,
+                noteY,
+                truncatedWidth + paddingX * 2,
+                textHeight + paddingY * 2
+              );
+              
+              // 绘制文本
+              ctx.fillStyle = dataset.borderColor || '#ef4444';
+              ctx.fillText(
+                truncatedText,
+                noteX + paddingX,
+                noteY + textHeight + paddingY
+              );
+            }
+          } else {
+            // 检查上边界：如果超出，则向下调整
+            if (noteY < padding.top) {
+              noteY = padding.top;
+            }
+            
+            // 绘制背景框（半透明白色背景）
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.fillRect(
+              noteX,
+              noteY,
+              noteBoxWidth,
+              textHeight + paddingY * 2
+            );
+            
+            // 绘制边框
+            ctx.strokeStyle = dataset.borderColor || '#ef4444';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(
+              noteX,
+              noteY,
+              noteBoxWidth,
+              textHeight + paddingY * 2
+            );
+            
+            // 绘制文本
+            ctx.fillStyle = dataset.borderColor || '#ef4444';
+            ctx.fillText(
+              dataset.lineNote,
+              noteX + paddingX,
+              noteY + textHeight + paddingY
+            );
+          }
+        }
+      }
+    }
+  });
+
+  // 绘制图例（在图表下方，从左往右排列，自适应列数，几乎贴近）
+  const legendStartY = height - padding.bottom + 52;
+  const legendItemHeight = 22; // 每个图例项的高度，适应更大的字体
+  // 图例从更靠左的位置开始，减少左边空白
+  const legendStartX = 20; // 图例起始位置，比图表左边距更靠左
+  // 根据可用宽度自适应计算列数和每个图例项的宽度，充分利用空间（从图例起始位置到右边距）
+  const availableWidth = width - legendStartX - padding.right;
+  const maxLegendCols = Math.max(1, Math.floor(availableWidth / minLegendItemWidth)); // 根据最小宽度计算最大列数
+  const legendCols = Math.min(maxLegendCols, chartData.datasets.length); // 列数不超过数据集数量
+  // 动态计算每个图例项的宽度，让图例均匀分布填满可用宽度
+  const legendItemWidth = legendCols > 0 ? availableWidth / legendCols : minLegendItemWidth;
   const legendRows = Math.ceil(chartData.datasets.length / legendCols);
-  const legendStartX = padding.left;
 
   chartData.datasets.forEach((dataset, index) => {
     const row = Math.floor(index / legendCols);
@@ -815,9 +1113,9 @@ export async function generateCurveChart(
     const legendX = legendStartX + col * legendItemWidth;
     const legendY = legendStartY + row * legendItemHeight;
 
-    // 绘制图例线条（更短）
+    // 绘制图例线条（更短，加粗2倍）
     ctx.strokeStyle = dataset.borderColor || '#3b82f6';
-    ctx.lineWidth = dataset.borderWidth || 2;
+    ctx.lineWidth = (dataset.borderWidth || 2) * 2; // 加粗2倍
     ctx.setLineDash(dataset.borderDash || []);
     ctx.beginPath();
     ctx.moveTo(legendX, legendY);
@@ -825,14 +1123,14 @@ export async function generateCurveChart(
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // 绘制图例文本（字体稍小，更紧凑）
+    // 绘制图例文本（字体增大2px，自适应排版）
     ctx.fillStyle = '#1f2937';
-    ctx.font = '11px Arial';
+    ctx.font = '13px Arial'; // 从11px增加到13px
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
-    // 如果文本太长，截断
+    // 如果文本太长，截断（考虑线条宽度25px + 间距3px = 28px）
     const label = dataset.label || `线条 ${index + 1}`;
-    const maxLabelWidth = legendItemWidth - 30;
+    const maxLabelWidth = Math.max(20, legendItemWidth - 28); // 保持足够的文本显示空间，至少20px
     const truncatedLabel = ctx.measureText(label).width > maxLabelWidth 
       ? label.substring(0, Math.floor(label.length * maxLabelWidth / ctx.measureText(label).width)) + '...'
       : label;

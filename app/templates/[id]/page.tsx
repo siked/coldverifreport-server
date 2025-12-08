@@ -11,6 +11,7 @@ interface TemplateDetail {
   name: string;
   content: string;
   tags?: TemplateTag[];
+  taskId?: string;
   updatedAt?: string;
 }
 
@@ -44,10 +45,53 @@ export default function TemplateEditorPage({ params }: { params: Promise<{ id: s
         throw new Error(data.error || '加载模板失败');
       }
       const data = await res.json();
-      setTemplate({
+      const loadedTemplate = {
         ...data.template,
         tags: data.template.tags || [],
-      });
+      };
+      setTemplate(loadedTemplate);
+      
+      // 如果模板有关联的任务，自动加载任务数据到 LokiJS
+      if (loadedTemplate.taskId) {
+        try {
+          const { getAllCachedData } = await import('@/lib/cache');
+          const { loadTaskDataToLoki } = await import('@/lib/lokijs');
+          
+          console.log(`[模板加载] 检测到关联任务，开始加载任务数据到 LokiJS (任务ID: ${loadedTemplate.taskId})`);
+          
+          // 先获取任务详情
+          try {
+            const taskRes = await fetch('/api/tasks');
+            if (taskRes.ok) {
+              const taskData = await taskRes.json();
+              const foundTask = taskData.tasks?.find((t: any) => t._id === loadedTemplate.taskId);
+              if (foundTask) {
+                setSelectedTask({
+                  _id: foundTask._id,
+                  taskNumber: foundTask.taskNumber,
+                  taskName: foundTask.taskName,
+                  categoryId: foundTask.categoryId,
+                  taskTypeId: foundTask.taskTypeId,
+                });
+              }
+            }
+          } catch (taskErr) {
+            console.warn('[模板加载] 获取任务详情失败:', taskErr);
+          }
+          
+          // 加载任务数据到 LokiJS
+          const allData = await getAllCachedData(loadedTemplate.taskId);
+          
+          if (allData.length > 0) {
+            await loadTaskDataToLoki(loadedTemplate.taskId, allData);
+            console.log(`[模板加载] 成功加载 ${allData.length} 条数据到 LokiJS`);
+          } else {
+            console.warn(`[模板加载] 任务 ${loadedTemplate.taskId} 在 IndexedDB 中没有数据`);
+          }
+        } catch (error) {
+          console.error('[模板加载] 加载任务数据到 LokiJS 失败:', error);
+        }
+      }
     } catch (err: any) {
       setError(err.message || '加载模板失败');
     } finally {
@@ -76,6 +120,7 @@ export default function TemplateEditorPage({ params }: { params: Promise<{ id: s
           name: template.name,
           content,
           tags: template.tags || [],
+          taskId: selectedTask?._id || template.taskId,
         }),
       });
 
@@ -84,7 +129,7 @@ export default function TemplateEditorPage({ params }: { params: Promise<{ id: s
         throw new Error(data.error || '保存失败');
       }
 
-      setTemplate({ ...template, content, updatedAt: new Date().toISOString() });
+      setTemplate({ ...template, content, taskId: selectedTask?._id || template.taskId, updatedAt: new Date().toISOString() });
     } catch (err: any) {
       alert(err.message || '保存失败');
       throw err;
@@ -102,6 +147,7 @@ export default function TemplateEditorPage({ params }: { params: Promise<{ id: s
           name: template.name,
           content: template.content,
           tags,
+          taskId: selectedTask?._id || template.taskId,
         }),
       });
 
@@ -138,6 +184,7 @@ export default function TemplateEditorPage({ params }: { params: Promise<{ id: s
           name: trimmedName,
           content: template.content,
           tags: template.tags || [],
+          taskId: selectedTask?._id || template.taskId,
         }),
       });
 
@@ -209,7 +256,66 @@ export default function TemplateEditorPage({ params }: { params: Promise<{ id: s
         onChangeTags={handleTagsChange}
         templateId={template._id}
         templateName={template.name}
-        onTaskChange={setSelectedTask}
+        initialSelectedTask={selectedTask}
+        onTaskChange={async (task) => {
+          const newTaskId = task?._id;
+          const currentTaskId = template?.taskId;
+          
+          // 只有当任务ID真正改变时才保存
+          if (newTaskId === currentTaskId) {
+            // 任务ID没有变化，只更新状态，不保存
+            setSelectedTask(task);
+            return;
+          }
+          
+          setSelectedTask(task);
+          
+          // 当任务改变时，保存到模板
+          if (template && task) {
+            try {
+              const res = await fetch('/api/templates', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  id: template._id,
+                  name: template.name,
+                  content: template.content,
+                  tags: template.tags || [],
+                  taskId: task._id,
+                }),
+              });
+
+              if (res.ok) {
+                setTemplate({ ...template, taskId: task._id, updatedAt: new Date().toISOString() });
+                console.log('[任务关联] 已保存任务关联到模板');
+              }
+            } catch (err: any) {
+              console.error('[任务关联] 保存任务关联失败:', err);
+            }
+          } else if (template && !task && currentTaskId) {
+            // 如果取消任务关联（从有任务变为无任务），才保存
+            try {
+              const res = await fetch('/api/templates', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  id: template._id,
+                  name: template.name,
+                  content: template.content,
+                  tags: template.tags || [],
+                  taskId: null,
+                }),
+              });
+
+              if (res.ok) {
+                setTemplate({ ...template, taskId: undefined, updatedAt: new Date().toISOString() });
+                console.log('[任务关联] 已取消任务关联');
+              }
+            } catch (err: any) {
+              console.error('[任务关联] 取消任务关联失败:', err);
+            }
+          }
+        }}
       />
     );
   };
