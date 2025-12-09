@@ -7,6 +7,7 @@ export interface TemplateTag {
   description?: string;
   type: 'text' | 'number' | 'date' | 'datetime' | 'location' | 'boolean' | 'image' | 'cda-image';
   value: any;
+  functionConfig?: any;
 }
 
 export interface Template {

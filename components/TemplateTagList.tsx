@@ -16,6 +16,8 @@ import {
 } from 'lucide-react';
 import Modal from './Modal';
 import imageCompression from 'browser-image-compression';
+import { TagFunctionAction } from './tag-functions/TagFunctionAction';
+import type { TagFunctionConfig } from './tag-functions/types';
 
 export interface TemplateTag {
   _id?: string;
@@ -23,15 +25,17 @@ export interface TemplateTag {
   description?: string;
   type: 'text' | 'number' | 'date' | 'datetime' | 'location' | 'boolean' | 'image' | 'cda-image';
   value: any;
+  functionConfig?: TagFunctionConfig;
 }
 
 interface TemplateTagListProps {
   tags: TemplateTag[];
   onChange: (tags: TemplateTag[]) => void;
   templateId: string;
+  taskId?: string | null;
 }
 
-export default function TemplateTagList({ tags, onChange, templateId }: TemplateTagListProps) {
+export default function TemplateTagList({ tags, onChange, templateId, taskId }: TemplateTagListProps) {
   const [tagList, setTagList] = useState<TemplateTag[]>(tags);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingTag, setEditingTag] = useState<TemplateTag | null>(null);
@@ -107,6 +111,12 @@ export default function TemplateTagList({ tags, onChange, templateId }: Template
     syncChange(newTags);
   };
 
+  const handleFunctionApply = (tagId: string, payload: Partial<TemplateTag>) => {
+    if (!tagId) return;
+    const newTags = tagList.map((t) => (t._id === tagId ? { ...t, ...payload } : t));
+    syncChange(newTags);
+  };
+
   const handleCopyTag = (tagId: string | undefined) => {
     if (!tagId) return;
     const index = tagList.findIndex((t) => t._id === tagId);
@@ -132,8 +142,24 @@ export default function TemplateTagList({ tags, onChange, templateId }: Template
     setEditingNameValue('');
   };
 
-  const handleDragStart = (tagId: string | undefined) => {
+  const handleDragStart = (e: React.DragEvent, tagId: string | undefined) => {
     if (!tagId) return;
+    // 检查是否在弹窗或可交互元素上，如果是则阻止拖拽
+    const target = e.target as HTMLElement;
+    const selection = window.getSelection()?.toString();
+    if (
+      target.closest('[role="dialog"]') ||
+      target.closest('.fixed') ||
+      target.closest('input') ||
+      target.closest('textarea') ||
+      target.closest('select') ||
+      target.closest('button') ||
+      target.closest('a') ||
+      (selection && selection.length > 0)
+    ) {
+      e.preventDefault();
+      return;
+    }
     setDraggingId(tagId);
   };
 
@@ -523,15 +549,24 @@ export default function TemplateTagList({ tags, onChange, templateId }: Template
                       ? 'border-primary-300 shadow-sm'
                       : 'hover:shadow-sm'
                 }`}
-                draggable={!editingNameId}
-                onDragStart={() => handleDragStart(tag._id)}
+                draggable={false}
                 onDragOver={(e) => handleDragOver(e, tag._id)}
                 onDrop={() => handleDrop(tag._id)}
                 onDragEnd={() => handleDrop()}
               >
                 <div className="flex items-start justify-between">
                   <div className="flex items-start space-x-2 flex-1 min-w-0">
-                    <div className="mt-1 text-gray-400 cursor-grab">
+                    <div
+                      className="mt-1 text-gray-400 cursor-grab"
+                      draggable={!editingNameId}
+                      onDragStart={(e) => handleDragStart(e, tag._id)}
+                      onMouseDown={(e) => {
+                        // 阻止文本选择
+                        if (e.detail > 1) {
+                          e.preventDefault();
+                        }
+                      }}
+                    >
                       <GripVertical className="w-4 h-4" />
                     </div>
                     <div className="flex-1 min-w-0">
@@ -576,6 +611,12 @@ export default function TemplateTagList({ tags, onChange, templateId }: Template
                     id={`tag-menu-wrapper-${tagId}`}
                     className="relative flex items-center"
                   >
+                    <TagFunctionAction
+                      tag={tag}
+                      allTags={tagList}
+                      taskId={taskId}
+                      onApply={handleFunctionApply}
+                    />
                     <button
                       type="button"
                       onClick={() =>
@@ -662,6 +703,7 @@ interface LocationInputProps {
 }
 
 function LocationInput({ value, onChange }: LocationInputProps) {
+  const safeValue = Array.isArray(value) ? value : [];
   const [inputValue, setInputValue] = useState('');
 
   // 解析输入，支持单个ID和范围
@@ -744,7 +786,7 @@ function LocationInput({ value, onChange }: LocationInputProps) {
       const parsed = parseInput(inputValue);
       if (parsed.length > 0) {
         // 去重并添加到现有值中
-        const newValues = [...new Set([...value, ...parsed])];
+        const newValues = [...new Set([...safeValue, ...parsed])];
         onChange(newValues);
         setInputValue('');
       }
@@ -752,7 +794,7 @@ function LocationInput({ value, onChange }: LocationInputProps) {
   };
 
   const handleRemove = (index: number) => {
-    onChange(value.filter((_, i) => i !== index));
+    onChange(safeValue.filter((_, i) => i !== index));
   };
 
   return (
@@ -766,7 +808,7 @@ function LocationInput({ value, onChange }: LocationInputProps) {
         placeholder="如 C001、C001-C010 按回车"
       />
       <div className="flex flex-wrap gap-2">
-        {value.map((location, index) => (
+        {safeValue.map((location, index) => (
           <div
             key={index}
             className="relative inline-flex items-center px-3 py-1 bg-primary-50 border border-primary-200 rounded text-sm"

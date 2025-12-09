@@ -425,6 +425,7 @@ export default function TemplateEditorPage({ params }: { params: Promise<{ id: s
               tags={template?.tags || []}
               onChange={handleTagsChange}
               templateId={template?._id || ''}
+              taskId={selectedTask?._id || template?.taskId}
             />
           </div>
         </div>

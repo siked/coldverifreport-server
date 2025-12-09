@@ -269,7 +269,7 @@ X轴标签：13px → 15px
 3、在 设备编辑中 每个布点区域 用 方框 包起来，在编辑中 回车键 确认，并且 框上面 有 删除图标
 4、在 编号的后面显示 布点区域，使用 首字符标识（如：上层布点[上]、中层布点[中]、下层布点[下]），鼠标移动到 布点区域 上 显示 布点区域 的 详细信息
 
-
+1天8小时26分钟
 --------------------------------
 验证设备校准证书
 布局编号	无线温湿度验证设备校准证书编号	验证设备校准有效期至（1）年	备注
@@ -295,40 +295,86 @@ X轴标签：13px → 15px
 标签列表 标签菜单 中添加 数据计算与分析（函数方法）功能，就是将 结果 自动填写到标签值，下面是详细要求：
 1、函数方法 要独立模块，不要与 标签列表 代码 混在一起
 2、不同的 标签类型使用不同 的 函数方法
-3、在 标签菜单 图标 前面 增加一个 函数方法 图标，鼠标放上去 显示 函数方法 执行的 详细信息，点击后重新计算
+3、在 标签菜单 图标 前面 增加一个 函数方法 图标，
 4、函数方法 图标，有颜色区分，计算中 为黄色，计算完成 为绿色，计算失败 为红色
-
+5、鼠标 左击编辑，右击查看 函数数据处理详细（设备、时间、布点区域 已经计算时重要的信息） 日志，以及错误信息
+6、要将 输出 结果 自动填写到 标签值，并且 标签值 会 立即渲染，并且自动保存
 布点区域 类 函数方法：
-1、数据温度到达上限测点：
+
+
+添加新的 布点区域 类 函数方法：
+1、数据温度超过上限测点：
 选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
 选择开始时间： 选择标签（类型为 日期、时间）
 选择结束时间： 选择标签（类型为 日期、时间）
 上限温度：输入上限温度，默认 8
-输出：输出 数据温度 最快 到达上限测点（多个测点用 | 分割）
+输出：输出 数据温度 超过上限测点（多个测点用 | 分割）
 
-2、数据温度到达下限测点：
+2、数据温度低于下限测点：
 选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
 选择开始时间： 选择标签（类型为 日期、时间）
 选择结束时间： 选择标签（类型为 日期、时间）
 下限温度：输入下限温度，默认 2
-输出：输出 数据温度 最快 到达下限测点（多个测点用 | 分割）
+输出：输出 数据温度 低于下限测点（多个测点用 | 分割）
 
-3、数据湿度到达上限测点：
+3、数据湿度超过上限测点：
 选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
 选择开始时间： 选择标签（类型为 日期、时间）
 选择结束时间： 选择标签（类型为 日期、时间）
 上限湿度：输入上限湿度，默认 80
-输出：输出 数据湿度 最快 到达上限测点（多个测点用 | 分割）
+输出：输出 数据湿度 超过上限测点（多个测点用 | 分割）
 
-4、数据湿度到达下限测点：
+4、数据湿度低于下限测点：
 选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
 选择开始时间： 选择标签（类型为 日期、时间）
 选择结束时间： 选择标签（类型为 日期、时间）
 下限湿度：输入下限湿度，默认 20
-输出：输出 数据湿度 最快 到达下限测点（多个测点用 | 分割）
+输出：输出 数据湿度 低于下限测点（多个测点用 | 分割）
+
+6、数据温度第一个到达上限测点：
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+上限温度：输入上限温度，默认 8
+输出：输出 数据温度 第一个（最早） 到达上限测点（如果同时多个测点到达用 | 分割）
+
+7、数据温度第一个到达下限测点：
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+下限温度：输入下限温度，默认 2
+输出：输出 数据温度 第一个（最早） 到达下限测点（如果同时多个测点到达用 | 分割）
 
 
-数值 类 函数方法：
+8、数据湿度第一个到达上限测点：
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+上限湿度：输入上限湿度，默认 80
+输出：输出 数据湿度 第一个（最早） 到达上限测点（如果同时多个测点到达用 | 分割）
+
+9、数据湿度第一个到达下限测点：
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+下限湿度：输入下限湿度，默认 20
+输出：输出 数据湿度 第一个（最早） 到达下限测点（如果同时多个测点到达用 | 分割）
+
+10、数据温度最高值对应验证测点：
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+输出：输出 数据温度最高值对应验证测点（多个测点用 | 分割）
+
+11、数据温度最低值对应验证测点：
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+输出：输出 数据温度最低值对应验证测点（多个测点用 | 分割）
+
+
+
+添加新的 数字 类 函数方法：
 1、数据最高温度：
 选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
 选择开始时间： 选择标签（类型为 日期、时间）
@@ -364,3 +410,506 @@ X轴标签：13px → 15px
 选择结束时间： 选择标签（类型为 日期、时间）
 输出：输出 数据平均湿度
 
+7、数据中心点温度偏差值：
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择中心点布点标签：（类型为 布点区域，单选，如果 有多个布点 就提示错误，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+下面是 python的 参考代码，请根据 代码 修改 函数方法：
+def 数据中心点温度偏差值(document, data_map, TaskListId, run, text):
+    # 测点列表
+    r_data_id = libx.GetData_map(data_map, text[1], TaskListId)
+    # print(text[1] + ":", r_data_listid)
+    if r_data_id == None:
+        return False
+
+    # 时间
+    r_data_time = libx.GetData_map(data_map, text[2], TaskListId)
+    # print(text[2] + ":", r_data_time)
+    if r_data_time == None:
+        return False
+    if len(r_data_time.split("|")) != 2:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="错误参数[" + text[2] + "]!")
+        return False
+    time_a = datetime.datetime.strptime(r_data_time.split("|")[0], "%Y-%m-%d %H:%M").strftime("%Y-%m-%d %H:%M:00")
+    time_b = datetime.datetime.strptime(r_data_time.split("|")[1], "%Y-%m-%d %H:%M").strftime("%Y-%m-%d %H:%M:00")
+
+    # td─温度设定值
+    td = libx.GetData_map(data_map, text[3], TaskListId)
+    if td == None:
+        return False
+
+    if len(text) == 5:
+        # 最低
+        r_data_min = libx.GetData_map(data_map, text[4], TaskListId)
+        if r_data_min == None:
+            return False
+        # 最高-最低
+        td = float(td) - float(r_data_min)
+
+    results = get_SingleData_SELECT(data_map.get("T_task_id"), r_data_id, time_a, time_b, "avg(t_t)")
+    if results == None:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="数据异常!")
+        return False
+
+    run.text = libx.fnum_reserve( math.fabs(float(td) - float(results[0])) )
+
+
+数据温度均匀度值：
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+输出：输出 数据温度均匀度值
+下面是 python的 参考代码，请根据 代码 修改 函数方法：
+# 公式：每个设备温度变化范围求和（最高温度 - 最低温度 = 温度变化范围） / 数据总数
+def 数据温度均匀度值(document, data_map, TaskListId, run, text):
+    # 测点列表
+    r_data_listid = libx.GetData_map(data_map, text[1], TaskListId)
+
+    if r_data_listid == None:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="找不到[" + text[1] + "]!")
+        return False
+    if len(r_data_listid.split("|")) == 0:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="错误参数[" + text[2] + "]!")
+        return False
+
+    # 时间
+    r_data_time = libx.GetData_map(data_map, text[2], TaskListId)
+    if r_data_time == None:
+        return False
+    if len(r_data_time.split("|")) != 2:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="错误参数[" + text[2] + "]!")
+        return False
+
+    time_a = datetime.datetime.strptime(r_data_time.split("|")[0], "%Y-%m-%d %H:%M")
+    time_b = datetime.datetime.strptime(r_data_time.split("|")[1], "%Y-%m-%d %H:%M")
+    duration = (time_b - time_a)
+    seconds = int(duration.seconds / 60) + duration.days * 24 * 60  # 分钟数
+
+    Data_list, Data_min, Data_max = BWXtemperatureChangeTrendOfEachMeasuringPointDuringOperation2(
+        data_map.get("T_task_id"), r_data_listid, r_data_time)
+
+    TemperatureVariationRange = 0
+
+
+    for y in range(len(Data_list)):
+        if Data_list[y][4] != "温度变化范围":
+            TemperatureVariationRange += float(Data_list[y][4])
+
+    a = float(TemperatureVariationRange) / seconds
+
+    run.text = libx.fnum_reserve_2(abs(a))  # 保留两位小数
+
+
+数据中心点温度波动度：
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+输出：输出 数据中心点温度波动度
+下面是 python的 参考代码，请根据 代码 修改 函数方法：
+def 数据中心点温度波动度(document, data_map, TaskListId, run, text):
+    Task = data_map.get("T_task_id")
+
+    # 测点列表
+    r_data_id = libx.GetData_map(data_map, text[1], TaskListId)
+    if r_data_id == None:
+        return False
+
+    # 时间
+    r_data_time = libx.GetData_map(data_map, text[2], TaskListId)
+    if r_data_time == None:
+        return False
+    if len(r_data_time.split("|")) != 2:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="错误参数!")
+        return False
+    time_a = datetime.datetime.strptime(r_data_time.split("|")[0], "%Y-%m-%d %H:%M").strftime("%Y-%m-%d %H:%M:00")
+    time_b = datetime.datetime.strptime(r_data_time.split("|")[1], "%Y-%m-%d %H:%M").strftime("%Y-%m-%d %H:%M:00")
+
+    results_max = get_SingleData_SELECT(Task, r_data_id, time_a, time_b, "max(t_t)")[0]
+    results_min = get_SingleData_SELECT(Task, r_data_id, time_a, time_b, "min(t_t)")[0]
+
+    run.text = libx.fnum_reserve_2(abs((float(results_max) - float(results_min)) / 2))  #保留两位小数
+
+
+
+数据变化范围求和：
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+输出：输出 数据变化范围求和
+下面是 python的 参考代码，请根据 代码 修改 函数方法：
+def 数据变化范围求和(document, data_map, TaskListId, run, text):
+    # 测点列表
+    r_data_listid = libx.GetData_map(data_map, text[1], TaskListId)
+    # print(text[1] + ":", r_data_listid)
+    if r_data_listid == None:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="找不到[" + text[1] + "]!")
+        return False
+    if len(r_data_listid.split("|")) == 0:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="错误参数[" + text[2] + "]!")
+        return False
+
+    # 时间
+    r_data_time = libx.GetData_map(data_map, text[2], TaskListId)
+    if r_data_time == None:
+        return False
+    if len(r_data_time.split("|")) != 2:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="错误参数[" + text[2] + "]!")
+        return False
+
+    Data_list, Data_min, Data_max = BWXtemperatureChangeTrendOfEachMeasuringPointDuringOperation2(
+        data_map.get("T_task_id"), r_data_listid, r_data_time)  
+
+    TemperatureVariationRange = 0
+
+    # 插入表格
+    for y in range(len(Data_list)):
+        if Data_list[y][4] != "温度变化范围":
+            TemperatureVariationRange += float(Data_list[y][4])  # 最高温度 - 最低温度 = 温度变化范围
+
+    run.text = libx.fnum_reserve(abs(TemperatureVariationRange)) # 保留一位
+
+数据温度平均偏差值：
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+最高温度：输入最高温度，默认 8 或者 标签（类型为 数字）
+最低温度：输入最低温度，默认 2 或者 标签（类型为 数字）
+输出：输出 数据温度平均偏差值
+下面是 python的 参考代码，请根据 代码 修改 函数方法：
+def 数据温度平均偏差(document, data_map, TaskListId, run, text):
+    Task = data_map.get("T_task_id")
+
+    # 测点列表
+    r_data_listid = libx.GetData_map(data_map, text[1], TaskListId)
+    if r_data_listid == None:
+        return False
+
+    # 时间
+    r_data_time = libx.GetData_map(data_map, text[2], TaskListId)
+    if r_data_time == None:
+        return False
+    if len(r_data_time.split("|")) != 2:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="错误参数!")
+        return False
+    time_a = datetime.datetime.strptime(r_data_time.split("|")[0], "%Y-%m-%d %H:%M").strftime("%Y-%m-%d %H:%M:00")
+    time_b = datetime.datetime.strptime(r_data_time.split("|")[1], "%Y-%m-%d %H:%M").strftime("%Y-%m-%d %H:%M:00")
+
+    # 最高
+    r_data_max = libx.GetData_map(data_map, text[3], TaskListId)
+    if r_data_max == None:
+        return False
+    r_data_max = float(r_data_max)
+
+    # 最低
+    r_data_min = libx.GetData_map(data_map, text[4], TaskListId)
+    if r_data_min == None:
+        return False
+    r_data_min = float(r_data_min)
+
+    """业务数据来源"""
+    # 获取 真实数据条数
+    DISTINCT_results = get_sn_data(data_map.get("T_task_id"), r_data_listid) #sql = "SELECT DISTINCT t_id,t_sn  FROM z_task_data_" + Task + WHERE + " ORDER BY t_id"
+    data_list = []
+    for d_row in DISTINCT_results:
+        # 提取数据
+        results = get_SingleData_SELECT(Task, d_row[1], time_a, time_b, "avg(t_t)")
+        if results == None:
+            TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="数据异常!")
+            return False
+        data_list.append(results[0])
+
+    if data_list == None or len(data_list) == 0:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="数据为空异常!")
+        return False
+
+    run.text = libx.fnum_reserve((r_data_max - r_data_min) - float(np.mean(data_list)))
+
+
+数据温度均匀度计算最高温度：
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+输出：输出 数据温度均匀度计算最高温度
+下面是 python的 参考代码，请根据 代码 修改 函数方法：
+def 数据温度均匀度计算最高(document, data_map, TaskListId, run, text):
+    # SN 1
+    r_data_sn1 = libx.GetData_map(data_map, text[1], TaskListId)
+    # print(text[1] + ":", r_data_sn1)
+    if r_data_sn1 == None:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="找不到[" + text[1] + "]!")
+        return False
+    if len(r_data_sn1) == 0:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="错误参数[" + text[1] + "]!")
+        return False
+
+    # 时间
+    r_data_time = libx.GetData_map(data_map, text[2], TaskListId)
+    if r_data_time == None:
+        return False
+    if len(r_data_time.split("|")) != 2:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="错误参数[" + text[2] + "]!")
+        return False
+
+    """业务数据来源"""
+    # sql = "SELECT date_format(t_time, '%Y-%m-%d %H:%i'),max(t_t),min(t_t),avg(t_t) FROM z_task_data_" + Task + "  WHERE t_sn IN(" + t_sn_list + ") and t_time = '" + time_a.strftime("%Y-%m-%d %H:%M:00") + "' ORDER BY t_time "
+    data_list, data_is = TimeGetMaxMinAvg(data_map.get("T_task_id"), TaskListId, r_data_sn1, r_data_time)
+    if data_is == False:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="数据异常!")
+        return False
+    # print("Data_list_a len:", len(Data_list_a))
+    print("data_list len:", len(data_list))
+
+    max_num = 0
+    min_num = 0
+    # for y in range(math.ceil(len(Data_list_a) / 2)):
+    for y in range(math.ceil((len(data_list)) / 2)):
+        max_num += float(data_list[y][1])
+        min_num += float(data_list[y][2])
+
+        # ----------------
+        y = int(len(data_list) / 2) + y + (len(data_list) % 2)
+        if y > len(data_list) - 1:
+            continue;
+
+        max_num += float(data_list[y][1])
+
+        min_num += float(data_list[y][2])
+
+    run.text = libx.fnum_reserve(max_num)
+
+数据温度均匀度计算最低：
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+输出：输出 数据温度均匀度计算最低
+下面是 python的 参考代码，请根据 代码 修改 函数方法：
+def 数据温度均匀度计算最低(document, data_map, TaskListId, run, text):
+    # SN 1
+    r_data_sn1 = libx.GetData_map(data_map, text[1], TaskListId)
+    # print(text[1] + ":", r_data_sn1)
+    if r_data_sn1 == None:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="找不到[" + text[1] + "]!")
+        return False
+    if len(r_data_sn1) == 0:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="错误参数[" + text[1] + "]!")
+        return False
+
+    # 时间
+    r_data_time = libx.GetData_map(data_map, text[2], TaskListId)
+    if r_data_time == None:
+        return False
+    if len(r_data_time.split("|")) != 2:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="错误参数[" + text[2] + "]!")
+        return False
+
+    """业务数据来源"""
+    data_list, data_is = TimeGetMaxMinAvg(data_map.get("T_task_id"), TaskListId, r_data_sn1, r_data_time)
+    if data_is == False:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="数据异常!")
+        return False
+    # print("Data_list_a len:", len(Data_list_a))
+    print("data_list len:", len(data_list))
+
+    max_num = 0
+    min_num = 0
+    # for y in range(math.ceil(len(Data_list_a) / 2)):
+    for y in range(math.ceil((len(data_list)) / 2)):
+        max_num += float(data_list[y][1])
+        min_num += float(data_list[y][2])
+
+        # ----------------
+        y = int(len(data_list) / 2) + y + (len(data_list) % 2)
+        if y > len(data_list) - 1:
+            continue;
+
+        max_num += float(data_list[y][1])
+
+        min_num += float(data_list[y][2])
+
+    run.text = libx.fnum_reserve(min_num)
+
+
+数据温度均匀度计算值：
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+输出：输出 数据温度均匀度计算值
+下面是 python的 参考代码，请根据 代码 修改 函数方法：
+def 数据温度均匀度计算值(document, data_map, TaskListId, run, text):
+
+    # SN 1
+    r_data_sn1 = libx.GetData_map(data_map, text[1], TaskListId)
+    # print(text[1] + ":", r_data_sn1)
+    if r_data_sn1 == None:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="找不到[" + text[1] + "]!")
+        return False
+    if len(r_data_sn1) == 0:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="错误参数[" + text[1] + "]!")
+        return False
+
+    # 时间
+    r_data_time = libx.GetData_map(data_map, text[2], TaskListId)
+    if r_data_time == None:
+        return False
+    if len(r_data_time.split("|")) != 2:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="错误参数[" + text[2] + "]!")
+        return False
+
+    """业务数据来源"""
+    # sql = "SELECT date_format(t_time, '%Y-%m-%d %H:%i'),max(t_t),min(t_t),avg(t_t) FROM z_task_data_" + Task + "  WHERE t_sn IN(" + t_sn_list + ") and t_time = '" + time_a.strftime("%Y-%m-%d %H:%M:00") + "' ORDER BY t_time "
+    data_list, data_is = TimeGetMaxMinAvg(data_map.get("T_task_id"), TaskListId, r_data_sn1, r_data_time)
+    if data_is == False:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="数据异常!")
+        return False
+    # print("Data_list_a len:", len(Data_list_a))
+    print("data_list len:", len(data_list))
+
+    max_num = 0
+    min_num = 0
+    # for y in range(math.ceil(len(Data_list_a) / 2)):
+    for y in range(math.ceil((len(data_list)) / 2)):
+        max_num += float(data_list[y][1])
+        min_num += float(data_list[y][2])
+
+        # ----------------
+        y = int(len(data_list) / 2) + y + (len(data_list) % 2)
+        if y > len(data_list) - 1:
+            continue;
+
+        max_num += float(data_list[y][1])
+
+        min_num += float(data_list[y][2])
+
+    run.text = libx.fnum_reserve_2(abs((max_num - min_num) / len(data_list)))
+
+耗电率计算：
+开始时间：选择标签（类型为 日期、时间）
+结束时间：选择标签（类型为 日期、时间）
+开始电量：选择标签（类型为 数字）
+结束电量：选择标签（类型为 数字）
+输出：（开始电量 % -结束电量 %）÷电量测试时间
+
+电量最长使用时长：
+开始时间：选择标签（类型为 日期、时间）     
+结束时间：选择标签（类型为 日期、时间）
+开始电量：选择标签（类型为 数字）
+结束电量：选择标签（类型为 数字）
+输出：输出 电量最长使用时长
+下面是 python的 参考代码，请根据 代码 修改 函数方法：
+time_a = datetime.datetime.strptime(电量测试时间.split("|")[0], "%Y-%m-%d %H:%M")
+    time_b = datetime.datetime.strptime(电量测试时间.split("|")[1], "%Y-%m-%d %H:%M")
+
+    duration = (time_b - time_a)
+    seconds = int(duration.seconds / 60) + duration.days * 24 * 60  # 分钟数
+    gongl = (float((int(开始电量) - int(结束电量)) / (seconds / 60)))
+    run.text = libx.fnum_reserve_2( 90 / gongl)  # 保留两位小数
+
+
+平均降温速率： 
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+输出：输出 平均降温速率
+下面是 python的 参考代码，请根据 代码 修改 函数方法：
+def 平均降温速率(document, data_map, TaskListId, run, text):
+    Task = data_map.get("T_task_id")
+    # 测点列表
+    r_data_listid = libx.GetData_map(data_map, text[1], TaskListId)
+    if r_data_listid == None:
+        return False
+
+    # 时间
+    r_data_time = libx.GetData_map(data_map, text[2], TaskListId)
+    if r_data_time == None:
+        return False
+    if len(r_data_time.split("|")) != 2:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="错误参数!")
+        return False
+    time_a = datetime.datetime.strptime(r_data_time.split("|")[0], "%Y-%m-%d %H:%M").strftime("%Y-%m-%d %H:%M:00")
+    time_b = datetime.datetime.strptime(r_data_time.split("|")[1], "%Y-%m-%d %H:%M").strftime("%Y-%m-%d %H:%M:00")
+
+    time_a_ = datetime.datetime.strptime(r_data_time.split("|")[0], "%Y-%m-%d %H:%M")
+    time_b_ = datetime.datetime.strptime(r_data_time.split("|")[1], "%Y-%m-%d %H:%M")
+
+    duration = (time_b_ - time_a_)
+
+    """业务数据来源"""
+    # 获取 真实数据条数
+    DISTINCT_results = get_sn_data(data_map.get("T_task_id"), r_data_listid)
+    data_list_a = []
+    for d_row in DISTINCT_results:
+        # 提取数据
+        results = get_SingleData_SELECT(Task, d_row[1], time_a, time_a, "avg(t_t)")
+        if results == None:
+            TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="数据异常!")
+            return False
+        data_list_a.append(results[0])
+
+    if len(data_list_a) == 0:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="数据为空异常!")
+        return False
+    data_list_b = []
+    for d_row in DISTINCT_results:
+        # 提取数据
+        results = get_SingleData_SELECT(Task, d_row[1], time_b, time_b, "avg(t_t)")
+        if results == None:
+            TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="数据异常!")
+            return False
+        data_list_b.append(results[0])
+
+    if len(data_list_b) == 0:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="数据为空异常!")
+        return False
+    Decimal(round(np.mean(data_list_a), 1))
+
+    # 计算平均值并保留一位小数
+    mean_a = Decimal(round(np.mean(data_list_a), 1))
+    mean_b = Decimal(round(np.mean(data_list_b), 1))
+
+    # 计算绝对差值
+    abs_diff = abs(mean_a - mean_b)
+
+    # 计算每分钟的温度变化
+    temperature_rate = abs_diff / int(duration.seconds / 60)  # 转换为℃/分钟
+
+    run.text =  libx.fnum_reserve_3(temperature_rate)
+
+
+获取设备时间点温度：
+选择布点标签：（类型为 布点区域，单选，如果 有多个布点 就提示错误，标签值 不能为空）
+选择时间： 选择标签（类型为 日期、时间）
+输出：输出 获取设备时间点温度
+
+
+
+
+
+添加新的 时间 类 函数方法：
+
+数据温度第一次到达上限时间：
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+上限温度：输入上限温度，默认 8
+输出：输出 数据温度第一次到达上限时间（可以参考 数据温度第一个到达上限测点 的 函数方法）
+
+数据温度第一次到达下限时间：
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+下限温度：输入下限温度，默认 2
+输出：输出 数据温度第一次到达下限时间（可以参考 数据温度第一个到达下限测点 的 函数方法）
+
+
+数据取最高点时间：
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+输出：输出 数据取最高点时间
+
+数据取最低点时间：
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+输出：输出 数据取最低点时间
