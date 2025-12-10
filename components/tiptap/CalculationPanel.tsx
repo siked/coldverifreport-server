@@ -11,7 +11,8 @@ export type CalculationType =
   | 'floor' // 取整
   | 'abs' // 取绝对值
   | 'max' // 取最大值
-  | 'min'; // 取最小值
+  | 'min' // 取最小值
+  | 'timeDiff'; // 时间差（天时分）
 
 export type CalculationDataSource = {
   type: 'calculation';
@@ -47,6 +48,7 @@ const CALCULATION_TYPES: Array<{
   { value: 'abs', label: '取绝对值', requiresTwoTags: false },
   { value: 'max', label: '取最大值', requiresTwoTags: true },
   { value: 'min', label: '取最小值', requiresTwoTags: true },
+  { value: 'timeDiff', label: '时间差（天时分）', requiresTwoTags: true },
 ];
 
 export default function CalculationPanel({
@@ -59,15 +61,30 @@ export default function CalculationPanel({
 }: CalculationPanelProps) {
   const DEFAULT_DECIMALS = 1;
 
-  const [calculationType, setCalculationType] = useState<CalculationType>('add');
-  const [selectedTagId1, setSelectedTagId1] = useState<string>('');
-  const [selectedTagId2, setSelectedTagId2] = useState<string>('');
-  const [decimals, setDecimals] = useState(DEFAULT_DECIMALS);
+  const [calculationType, setCalculationType] = useState<CalculationType>(
+    existingSource?.calculationType || 'add'
+  );
+  const [selectedTagId1, setSelectedTagId1] = useState<string>(existingSource?.tagId1 || '');
+  const [selectedTagId2, setSelectedTagId2] = useState<string>(existingSource?.tagId2 || '');
+  const [decimals, setDecimals] = useState(existingSource?.decimals ?? DEFAULT_DECIMALS);
 
   // 过滤出数字类型的标签
   const numberTags = useMemo(
     () => tags.filter((tag) => tag.type === 'number'),
     [tags]
+  );
+
+  // 过滤出日期/时间类型的标签
+  const timeTags = useMemo(
+    () => tags.filter((tag) => tag.type === 'date' || tag.type === 'datetime'),
+    [tags]
+  );
+
+  const isTimeDiff = calculationType === 'timeDiff';
+
+  const availableTags = useMemo(
+    () => (isTimeDiff ? timeTags : numberTags),
+    [isTimeDiff, numberTags, timeTags]
   );
 
   // 初始化已有数据源
@@ -79,34 +96,44 @@ export default function CalculationPanel({
       setDecimals(existingSource.decimals);
       return;
     }
-    // 默认选择第一个数字标签
-    if (numberTags.length > 0) {
-      setSelectedTagId1(numberTags[0]._id || '');
-      if (numberTags.length > 1) {
-        setSelectedTagId2(numberTags[1]._id || '');
+    // 默认选择标签
+    if (availableTags.length > 0) {
+      setSelectedTagId1(availableTags[0]._id || '');
+      if (availableTags.length > 1) {
+        setSelectedTagId2(availableTags[1]._id || '');
       }
     }
-  }, [existingSource, numberTags]);
+  }, [availableTags, existingSource]);
 
   // 当运算类型改变时，如果没有第二个标签且需要两个标签，尝试选择第二个标签
   useEffect(() => {
     const calcConfig = CALCULATION_TYPES.find((c) => c.value === calculationType);
-    if (calcConfig?.requiresTwoTags && !selectedTagId2 && numberTags.length > 1) {
-      const availableTag = numberTags.find((tag) => tag._id !== selectedTagId1);
+    if (!availableTags.find((tag) => tag._id === selectedTagId1) && availableTags[0]) {
+      setSelectedTagId1(availableTags[0]._id || '');
+    }
+    if (
+      calcConfig?.requiresTwoTags &&
+      (!selectedTagId2 || !availableTags.find((tag) => tag._id === selectedTagId2)) &&
+      availableTags.length > 1
+    ) {
+      const availableTag = availableTags.find((tag) => tag._id !== selectedTagId1);
       if (availableTag) {
         setSelectedTagId2(availableTag._id || '');
       }
     }
-  }, [calculationType, selectedTagId1, selectedTagId2, numberTags]);
+    if (!calcConfig?.requiresTwoTags) {
+      setSelectedTagId2('');
+    }
+  }, [availableTags, calculationType, selectedTagId1, selectedTagId2]);
 
   const selectedTag1 = useMemo(
-    () => numberTags.find((tag) => tag._id === selectedTagId1),
-    [numberTags, selectedTagId1]
+    () => availableTags.find((tag) => tag._id === selectedTagId1),
+    [availableTags, selectedTagId1]
   );
 
   const selectedTag2 = useMemo(
-    () => numberTags.find((tag) => tag._id === selectedTagId2),
-    [numberTags, selectedTagId2]
+    () => availableTags.find((tag) => tag._id === selectedTagId2),
+    [availableTags, selectedTagId2]
   );
 
   const currentCalcConfig = useMemo(
@@ -114,9 +141,41 @@ export default function CalculationPanel({
     [calculationType]
   );
 
+  const decimalsForSubmit = isTimeDiff ? 0 : decimals;
+
   // 计算预览值
   const previewValue = useMemo(() => {
     if (!selectedTag1) return '';
+    if (isTimeDiff) {
+      if (!selectedTag2) return '请选择结束时间';
+
+      const parseToDate = (val: any) => {
+        if (val instanceof Date) return val;
+        if (typeof val === 'number') return new Date(val);
+        if (typeof val === 'string') {
+          const parsed = new Date(val);
+          return Number.isNaN(parsed.getTime()) ? null : parsed;
+        }
+        return null;
+      };
+
+      const startDate = parseToDate(selectedTag1.value);
+      const endDate = parseToDate(selectedTag2.value);
+
+      if (!startDate || !endDate) return '无效时间';
+
+      const diffMs = endDate.getTime() - startDate.getTime();
+      const diffMinutes = Math.floor(diffMs / (1000 * 60));
+      const days = Math.floor(diffMinutes / (60 * 24));
+      const hours = Math.floor((diffMinutes % (60 * 24)) / 60);
+      const minutes = diffMinutes % 60;
+
+      const parts: string[] = [];
+      if (days !== 0) parts.push(`${days}天`);
+      if (hours !== 0) parts.push(`${hours}时`);
+      parts.push(`${minutes}分`);
+      return parts.join('');
+    }
 
     const val1 = typeof selectedTag1.value === 'number' ? selectedTag1.value : Number(selectedTag1.value);
     if (Number.isNaN(val1)) return '无效数值';
@@ -169,16 +228,22 @@ export default function CalculationPanel({
       }
       return result.toFixed(decimals);
     }
-  }, [selectedTag1, selectedTag2, calculationType, decimals, currentCalcConfig]);
+  }, [selectedTag1, selectedTag2, calculationType, decimals, currentCalcConfig, isTimeDiff]);
 
   const handleApply = () => {
     if (!selectedTag1) {
-      alert('请选择第一个标签');
+      alert(isTimeDiff ? '请选择开始时间' : '请选择第一个标签');
       return;
     }
 
-    if (currentCalcConfig?.requiresTwoTags && !selectedTag2) {
-      alert('请选择第二个标签');
+    const resolvedTag2 = currentCalcConfig?.requiresTwoTags
+      ? selectedTag2 || tags.find((tag) => tag._id === selectedTagId2)
+      : null;
+    const tagId2ForSubmit = currentCalcConfig?.requiresTwoTags
+      ? resolvedTag2?._id || selectedTagId2 || ''
+      : undefined;
+    if (currentCalcConfig?.requiresTwoTags && (!resolvedTag2 || !tagId2ForSubmit)) {
+      alert(isTimeDiff ? '请选择结束时间' : '请选择第二个标签');
       return;
     }
 
@@ -186,10 +251,13 @@ export default function CalculationPanel({
       type: 'calculation',
       calculationType,
       tagId1: selectedTag1._id || '',
-      tagId2: currentCalcConfig?.requiresTwoTags ? selectedTag2?._id : undefined,
+      tagId2: currentCalcConfig?.requiresTwoTags ? tagId2ForSubmit : undefined,
       tagName1: selectedTag1.name,
-      tagName2: currentCalcConfig?.requiresTwoTags ? selectedTag2?.name : undefined,
-      decimals,
+      tagName2:
+        currentCalcConfig?.requiresTwoTags
+          ? resolvedTag2?.name || tags.find((tag) => tag._id === tagId2ForSubmit)?.name
+          : undefined,
+      decimals: decimalsForSubmit,
       value: previewValue,
     };
 
@@ -231,14 +299,16 @@ export default function CalculationPanel({
       {/* 标签选择 */}
       <div className="mb-3 space-y-3">
         <div>
-          <label className="text-xs text-gray-600 mb-2 block">第一个标签（数字类型）</label>
+          <label className="text-xs text-gray-600 mb-2 block">
+            {isTimeDiff ? '开始时间（日期/时间标签）' : '第一个标签（数字类型）'}
+          </label>
           <select
             value={selectedTagId1}
             onChange={(e) => setSelectedTagId1(e.target.value)}
             className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
           >
             <option value="">请选择标签</option>
-            {numberTags.map((tag) => (
+            {availableTags.map((tag) => (
               <option key={tag._id} value={tag._id}>
                 {tag.name} ({tag.type}) - {tag.value}
               </option>
@@ -248,14 +318,16 @@ export default function CalculationPanel({
 
         {currentCalcConfig?.requiresTwoTags && (
           <div>
-            <label className="text-xs text-gray-600 mb-2 block">第二个标签（数字类型）</label>
+            <label className="text-xs text-gray-600 mb-2 block">
+              {isTimeDiff ? '结束时间（日期/时间标签）' : '第二个标签（数字类型）'}
+            </label>
             <select
               value={selectedTagId2}
               onChange={(e) => setSelectedTagId2(e.target.value)}
               className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
             >
               <option value="">请选择标签</option>
-              {numberTags
+              {availableTags
                 .filter((tag) => tag._id !== selectedTagId1)
                 .map((tag) => (
                   <option key={tag._id} value={tag._id}>
@@ -268,22 +340,24 @@ export default function CalculationPanel({
       </div>
 
       {/* 小数位数设置 */}
-      <div className="mb-3">
-        <label className="text-xs text-gray-600 mb-2 block">保留小数位数</label>
-        <input
-          type="number"
-          min={0}
-          max={10}
-          value={decimals}
-          onChange={(e) => {
-            const val = Number(e.target.value);
-            if (!Number.isNaN(val) && val >= 0 && val <= 10) {
-              setDecimals(val);
-            }
-          }}
-          className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-        />
-      </div>
+      {!isTimeDiff && (
+        <div className="mb-3">
+          <label className="text-xs text-gray-600 mb-2 block">保留小数位数</label>
+          <input
+            type="number"
+            min={0}
+            max={10}
+            value={decimals}
+            onChange={(e) => {
+              const val = Number(e.target.value);
+              if (!Number.isNaN(val) && val >= 0 && val <= 10) {
+                setDecimals(val);
+              }
+            }}
+            className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+          />
+        </div>
+      )}
 
       {/* 预览 */}
       <div className="mb-3 p-3 border rounded space-y-2 bg-gray-50">

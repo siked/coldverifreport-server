@@ -1,10 +1,16 @@
-import { PlusCircle, X, ChevronDown, Settings } from 'lucide-react';
+import { PlusCircle, X, ChevronDown, Settings, Plus, Trash2 } from 'lucide-react';
 import React, { useEffect, useMemo, useState, useRef } from 'react';
 import type { TemplateTag } from '../TemplateTagList';
 
+export type NumberCondition = {
+  operator: '>' | '>=' | '<' | '<=' | '==';
+  value: number;
+  output: string;
+};
+
 export type TagFormattingOption =
   | { type: 'date' | 'datetime'; pattern: string }
-  | { type: 'number'; decimals: number }
+  | { type: 'number'; decimals: number; conditions?: NumberCondition[] }
   | { type: 'boolean'; trueText: string; falseText: string }
   | { type: 'location'; prefix?: string; suffix?: string; outputCount?: boolean };
 
@@ -43,6 +49,7 @@ export default function TagSelectorPanel({
   const [selectedTagId, setSelectedTagId] = useState<string>('');
   const [timeFormat, setTimeFormat] = useState(DEFAULT_TIME_FORMAT);
   const [decimalPlaces, setDecimalPlaces] = useState(1);
+  const [numberConditions, setNumberConditions] = useState<NumberCondition[]>([]);
   const [trueText, setTrueText] = useState(DEFAULT_BOOLEAN_TRUE);
   const [falseText, setFalseText] = useState(DEFAULT_BOOLEAN_FALSE);
   const [locationPrefix, setLocationPrefix] = useState('');
@@ -83,6 +90,7 @@ export default function TagSelectorPanel({
         setTimeFormat(fmt.pattern);
       } else if (fmt.type === 'number') {
         setDecimalPlaces(fmt.decimals);
+        setNumberConditions(fmt.conditions || []);
       } else if (fmt.type === 'boolean') {
         setTrueText(fmt.trueText);
         setFalseText(fmt.falseText);
@@ -99,6 +107,7 @@ export default function TagSelectorPanel({
       setTimeFormat(DEFAULT_TIME_FORMAT);
     } else if (selectedTag.type === 'number') {
       setDecimalPlaces(1);
+      setNumberConditions([]);
     } else if (selectedTag.type === 'boolean') {
       setTrueText(DEFAULT_BOOLEAN_TRUE);
       setFalseText(DEFAULT_BOOLEAN_FALSE);
@@ -115,7 +124,11 @@ export default function TagSelectorPanel({
       return { type: selectedTag.type, pattern: timeFormat };
     }
     if (selectedTag.type === 'number') {
-      return { type: 'number', decimals: decimalPlaces };
+      return { 
+        type: 'number', 
+        decimals: decimalPlaces,
+        conditions: numberConditions.length > 0 ? numberConditions : undefined
+      };
     }
     if (selectedTag.type === 'boolean') {
       return { type: 'boolean', trueText, falseText };
@@ -134,7 +147,7 @@ export default function TagSelectorPanel({
       };
     }
     return null;
-  }, [decimalPlaces, falseText, selectedTag, timeFormat, trueText, locationPrefix, locationSuffix, outputCount]);
+  }, [decimalPlaces, falseText, selectedTag, timeFormat, trueText, locationPrefix, locationSuffix, outputCount, numberConditions]);
 
   const previewValue = selectedTag ? formatTagValue(selectedTag, currentFormatting) : '';
 
@@ -180,21 +193,116 @@ export default function TagSelectorPanel({
     }
     if (selectedTag.type === 'number') {
       return (
-        <div className="space-y-2">
-          <label className="text-xs text-gray-600">保留小数位数</label>
-          <input
-            type="number"
-            min={0}
-            max={10}
-            value={decimalPlaces}
-            onChange={(e) => {
-              const val = Number(e.target.value);
-              if (!Number.isNaN(val) && val >= 0) {
-                setDecimalPlaces(val);
-              }
-            }}
-            className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
-          />
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-xs text-gray-600">保留小数位数</label>
+            <input
+              type="number"
+              min={0}
+              max={10}
+              value={decimalPlaces}
+              onChange={(e) => {
+                const val = Number(e.target.value);
+                if (!Number.isNaN(val) && val >= 0) {
+                  setDecimalPlaces(val);
+                }
+              }}
+              className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+            />
+            <p className="text-xs text-gray-500">当没有条件匹配时使用此格式</p>
+          </div>
+          
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="text-xs text-gray-600 font-medium">条件判断</label>
+              <button
+                type="button"
+                onClick={() => {
+                  setNumberConditions([
+                    ...numberConditions,
+                    { operator: '>', value: 0, output: '' }
+                  ]);
+                }}
+                className="inline-flex items-center space-x-1 px-2 py-1 text-xs text-primary-600 hover:text-primary-700 border border-primary-300 rounded hover:bg-primary-50"
+              >
+                <Plus className="w-3 h-3" />
+                <span>添加条件</span>
+              </button>
+            </div>
+            
+            {numberConditions.length === 0 ? (
+              <p className="text-xs text-gray-400 italic">暂无条件，点击"添加条件"创建</p>
+            ) : (
+              <div className="space-y-2">
+                {numberConditions.map((condition, index) => (
+                  <div key={index} className="p-2 border rounded bg-gray-50 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-gray-600">条件 {index + 1}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNumberConditions(numberConditions.filter((_, i) => i !== index));
+                        }}
+                        className="p-1 text-gray-400 hover:text-red-600 rounded"
+                        title="删除条件"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <select
+                        value={condition.operator}
+                        onChange={(e) => {
+                          const newConditions = [...numberConditions];
+                          newConditions[index].operator = e.target.value as NumberCondition['operator'];
+                          setNumberConditions(newConditions);
+                        }}
+                        className="px-2 py-1 border rounded text-xs focus:outline-none focus:ring-2 focus:ring-primary-500"
+                      >
+                        <option value=">">大于</option>
+                        <option value=">=">大于等于</option>
+                        <option value="<">小于</option>
+                        <option value="<=">小于等于</option>
+                        <option value="==">等于</option>
+                      </select>
+                      <input
+                        type="number"
+                        step="any"
+                        value={condition.value}
+                        onChange={(e) => {
+                          const val = Number(e.target.value);
+                          if (!Number.isNaN(val)) {
+                            const newConditions = [...numberConditions];
+                            newConditions[index].value = val;
+                            setNumberConditions(newConditions);
+                          }
+                        }}
+                        className="px-2 py-1 border rounded text-xs focus:outline-none focus:ring-2 focus:ring-primary-500"
+                        placeholder="值"
+                      />
+                      <input
+                        type="text"
+                        value={condition.output}
+                        onChange={(e) => {
+                          const newConditions = [...numberConditions];
+                          newConditions[index].output = e.target.value;
+                          setNumberConditions(newConditions);
+                        }}
+                        className="px-2 py-1 border rounded text-xs focus:outline-none focus:ring-2 focus:ring-primary-500"
+                        placeholder="返回内容"
+                      />
+                    </div>
+                    <p className="text-xs text-gray-400">
+                      当标签值 {condition.operator} {condition.value} 时，返回 "{condition.output || '(空)'}"
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+            <p className="text-xs text-gray-500">
+              条件按顺序匹配，第一个匹配的条件将返回对应的内容
+            </p>
+          </div>
         </div>
       );
     }

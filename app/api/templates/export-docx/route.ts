@@ -96,13 +96,21 @@ const BASE_STYLES = `
   }
 `;
 
-function buildHtml(markdown: string) {
-  const rawHtml = marked.parse(markdown, {
-    breaks: true,
-    gfm: true,
-  }) as string;
+// 将 rgb/rgba 颜色转为 hex（WPS 对十六进制更友好）
+function toHexColor(input: string): string {
+  const hex = input.trim();
+  if (hex.startsWith('#')) return hex;
+  const rgbMatch = hex.match(/rgba?\((\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([0-9.]+))?\)/i);
+  if (!rgbMatch) return hex;
+  const r = Math.max(0, Math.min(255, parseInt(rgbMatch[1], 10)));
+  const g = Math.max(0, Math.min(255, parseInt(rgbMatch[2], 10)));
+  const b = Math.max(0, Math.min(255, parseInt(rgbMatch[3], 10)));
+  const to2 = (n: number) => n.toString(16).padStart(2, '0');
+  return `#${to2(r)}${to2(g)}${to2(b)}`;
+}
 
-  const dom = new JSDOM(`<body>${rawHtml}</body>`);
+function processHtml(html: string) {
+  const dom = new JSDOM(`<body>${html}</body>`);
   const { document } = dom.window;
   const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000';
 
@@ -119,23 +127,60 @@ function buildHtml(markdown: string) {
   });
 
   document.querySelectorAll('table').forEach((table) => {
-    table.setAttribute('style', 'width:100%;border-collapse:collapse;');
+    const existingTableStyle = table.getAttribute('style') || '';
+    // 为了兼容 WPS，将关键表格布局样式内联写入（某些渲染器不会读取 <style> 中的表格样式）
+    table.setAttribute('style', `width:100%;border-collapse:collapse;table-layout:fixed;${existingTableStyle}`);
   });
 
   document.querySelectorAll('th, td').forEach((cell) => {
-    cell.setAttribute(
-      'style',
-      'border:1px solid #d1d5db;padding:6pt 8pt;text-align:left;vertical-align:top;'
-    );
+    const existingStyle = cell.getAttribute('style') || '';
+    let baseStyle = 'border:1px solid #d1d5db;padding:6pt 8pt;text-align:left;vertical-align:top;';
+
+    // 解析已有背景色
+    const bgMatch = existingStyle.match(/background(?:-color)?:\s*([^;]+)/i);
+    const bgColor = bgMatch ? toHexColor(bgMatch[1]) : null;
+
+    if (cell.tagName.toLowerCase() === 'th' && !bgColor) {
+      // WPS 对 <style> 中的背景色支持不稳定，这里强制给表头写入内联底色
+      baseStyle += 'background-color:#f3f4f6;';
+    }
+
+    if (cell.tagName.toLowerCase() === 'th') {
+      baseStyle += 'font-weight:600;';
+    }
+
+    // 将已有样式拼在后面，确保用户自定义样式可以覆盖默认值
+    cell.setAttribute('style', `${baseStyle}${existingStyle}`);
+
+    // 额外：为了提升 WPS 呈现效果，把单元格背景色同步到内部段落/块级元素
+    if (bgColor) {
+      const innerBlocks = cell.querySelectorAll('p, div');
+      innerBlocks.forEach((el) => {
+        const s = el.getAttribute('style') || '';
+        if (!/background(-color)?:/i.test(s)) {
+          el.setAttribute('style', `background-color:${bgColor};${s}`);
+        }
+      });
+    }
   });
 
   return document.body.innerHTML;
 }
 
-async function convertMarkdownToDocx(markdown: string, templateName: string) {
-  const safeMarkdown = markdown?.trim();
+function buildHtmlFromMarkdown(markdown: string) {
+  const rawHtml = marked.parse(markdown, {
+    breaks: true,
+    gfm: true,
+  }) as string;
 
-  if (!safeMarkdown) {
+  return processHtml(rawHtml);
+}
+
+async function convertMarkdownToDocx(markdown: string, templateName: string, rawHtml?: string) {
+  const safeMarkdown = markdown?.trim();
+  const safeHtml = rawHtml?.trim();
+
+  if (!safeMarkdown && !safeHtml) {
     const emptyHtml = `
       <!DOCTYPE html>
       <html>
@@ -157,7 +202,7 @@ async function convertMarkdownToDocx(markdown: string, templateName: string) {
     });
   }
 
-  const contentHtml = buildHtml(safeMarkdown);
+  const contentHtml = safeHtml ? processHtml(safeHtml) : buildHtmlFromMarkdown(safeMarkdown!);
 
   const htmlDocument = `
     <!DOCTYPE html>
@@ -190,7 +235,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { templateId, content } = body;
+    const { templateId, content, html } = body;
 
     if (!templateId) {
       return NextResponse.json({ error: '模板ID不能为空' }, { status: 400 });
@@ -205,7 +250,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '模板不存在或无权限' }, { status: 404 });
     }
 
-    const docxBuffer = await convertMarkdownToDocx(content, template.name);
+    const docxBuffer = await convertMarkdownToDocx(content, template.name, html);
 
     return new NextResponse(Buffer.from(docxBuffer), {
       headers: {
@@ -221,19 +266,3 @@ export async function POST(request: NextRequest) {
     );
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

@@ -555,6 +555,7 @@ const formatTooltip = (payload: DataSourcePayload): string => {
       abs: '取绝对值',
       max: '取最大值',
       min: '取最小值',
+      timeDiff: '时间差（天时分）',
     };
     return `运算：${calcLabels[payload.calculationType]} (${payload.tagName1}${payload.tagName2 ? `, ${payload.tagName2}` : ''})`;
   }
@@ -629,6 +630,33 @@ const formatTagValue = (tag: TemplateTag, formatting?: TagFormattingOption | nul
   if (tag.type === 'number' && formatting?.type === 'number') {
     const num = typeof tag.value === 'number' ? tag.value : Number(tag.value);
     if (!Number.isNaN(num)) {
+      // 先检查条件判断
+      if (formatting.conditions && formatting.conditions.length > 0) {
+        for (const condition of formatting.conditions) {
+          let matched = false;
+          switch (condition.operator) {
+            case '>':
+              matched = num > condition.value;
+              break;
+            case '>=':
+              matched = num >= condition.value;
+              break;
+            case '<':
+              matched = num < condition.value;
+              break;
+            case '<=':
+              matched = num <= condition.value;
+              break;
+            case '==':
+              matched = num === condition.value;
+              break;
+          }
+          if (matched) {
+            return condition.output;
+          }
+        }
+      }
+      // 如果没有条件匹配，使用默认的小数位数格式化
       const decimals = Math.max(0, Math.min(20, formatting.decimals ?? 0));
       return num.toFixed(decimals);
     }
@@ -710,11 +738,12 @@ import type { TemplateTag } from './TemplateTagList';
 import DataSourceApiPanel from './tiptap/DataSourceApiPanel';
 import DataSourceMenu from './tiptap/DataSourceMenu';
 import OutlineSidebar from './tiptap/OutlineSidebar';
-import TagSelectorPanel, { TagFormattingOption } from './tiptap/TagSelectorPanel';
+import TagSelectorPanel, { TagFormattingOption, NumberCondition } from './tiptap/TagSelectorPanel';
 import CalculationPanel, { CalculationDataSource } from './tiptap/CalculationPanel';
 import CurveChartConfigPanel, { CurveChartConfig } from './tiptap/CurveChartConfigPanel';
 import TaskSelectorModal from './tiptap/TaskSelectorModal';
 import type { ApiFormState, ApiTestResult, HeadingItem } from './tiptap/types';
+import { CellSelection } from '@tiptap/pm/tables';
 
 interface TiptapEditorProps {
   content: string;
@@ -791,7 +820,9 @@ const createTurndown = () => {
             if (styleLower.includes('line-height') || 
                 styleLower.includes('padding') ||
                 styleLower.includes('height') ||
-                styleLower.includes('min-height')) {
+                styleLower.includes('min-height') ||
+                styleLower.includes('background') ||
+                styleLower.includes('background-color')) {
               return true;
             }
           }
@@ -1573,6 +1604,7 @@ const computeCurveChartInputSignature = (
       xhr.send(JSON.stringify({
         templateId,
         content: currentMarkdown,
+        html: editor?.getHTML?.()
       }));
       
       const { blob, filename } = await promise;
@@ -2563,6 +2595,30 @@ const computeCurveChartInputSignature = (
   // 计算运算结果
   const calculateValue = useCallback(
     (data: CalculationDataSource): string => {
+      if (data.calculationType === 'timeDiff') {
+        const tag1 = tags.find((t) => t._id === data.tagId1);
+        const tag2 = data.tagId2 ? tags.find((t) => t._id === data.tagId2) : null;
+        if (!tag1) return '标签1不存在';
+        if (!tag2) return '结束时间不存在';
+
+        const start = parseToDate(tag1.value);
+        const end = parseToDate(tag2.value);
+        if (!start) return '开始时间无效';
+        if (!end) return '结束时间无效';
+
+        const diffMs = end.getTime() - start.getTime();
+        const diffMinutes = Math.floor(diffMs / (1000 * 60));
+        const days = Math.floor(diffMinutes / (60 * 24));
+        const hours = Math.floor((diffMinutes % (60 * 24)) / 60);
+        const minutes = diffMinutes % 60;
+
+        const parts: string[] = [];
+        if (days !== 0) parts.push(`${days}天`);
+        if (hours !== 0) parts.push(`${hours}时`);
+        parts.push(`${minutes}分`);
+        return parts.join('');
+      }
+
       const tag1 = tags.find((t) => t._id === data.tagId1);
       if (!tag1) return '标签1不存在';
 
@@ -3335,6 +3391,7 @@ const computeCurveChartInputSignature = (
     y: number;
     imagePos?: number;
     isTable?: boolean;
+    cellBackground?: string;
   } | null>(null);
 
   useEffect(() => {
@@ -3424,6 +3481,26 @@ const computeCurveChartInputSignature = (
       })
       .run();
   }, [editor]);
+
+  // 更新选中单元格背景色
+  const setCellBackground = useCallback(
+    (color: string | null) => {
+      if (!editor) return;
+      const existingStyle = editor.getAttributes('tableCell')?.style as string | undefined;
+      const stripBackground = (style: string) =>
+        style
+          .split(';')
+          .map((s) => s.trim())
+          .filter((s) => s && !s.toLowerCase().startsWith('background-color'));
+      const baseParts = existingStyle ? stripBackground(existingStyle) : [];
+      if (color) {
+        baseParts.push(`background-color: ${color}`);
+      }
+      const nextStyle = baseParts.length > 0 ? baseParts.join('; ') : null;
+      editor.chain().focus().setCellAttribute('style', nextStyle).run();
+    },
+    [editor]
+  );
 
   // 通过 imagePos 替换图片
   const handleReplaceImageByPos = useCallback(async (imagePos: number) => {
@@ -3575,7 +3652,8 @@ const computeCurveChartInputSignature = (
       if (!target) return;
 
       const { selection } = editor.state;
-      const hasTextSelection = selection && !selection.empty && selection.from !== selection.to;
+      const isCellSel = selection instanceof CellSelection;
+      const hasTextSelection = !isCellSel && selection && !selection.empty && selection.from !== selection.to;
 
       const imageElement = target.closest('img');
       if (imageElement) {
@@ -3599,7 +3677,20 @@ const computeCurveChartInputSignature = (
             imagePos,
             existingSource: existing,
           });
+          // 只要命中图片即走数据来源菜单
+          return;
         }
+      }
+
+      if (isCellSel) {
+        event.preventDefault();
+        editor.chain().focus().run();
+        setContextMenu({
+          x: event.clientX,
+          y: event.clientY,
+          isTable: true,
+          cellBackground: undefined,
+        });
         return;
       }
 
@@ -3654,6 +3745,9 @@ const computeCurveChartInputSignature = (
             x: event.clientX,
             y: event.clientY,
             isTable: true,
+            cellBackground:
+              (cell as HTMLElement).style.backgroundColor ||
+              window.getComputedStyle(cell as HTMLElement).backgroundColor,
           });
           return;
         }
@@ -4356,6 +4450,59 @@ const computeCurveChartInputSignature = (
             <Trash2 className="w-4 h-4" />
             <span>删除表格</span>
           </button>
+          <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 border-t border-b mt-1">
+            单元格
+          </div>
+          <button
+            onClick={() => {
+              editor?.chain().focus().mergeCells().run();
+              setContextMenu(null);
+            }}
+            disabled={!editor?.can().mergeCells()}
+            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+          >
+            <Columns className="w-4 h-4" />
+            <span>合并单元格</span>
+          </button>
+          <button
+            onClick={() => {
+              editor?.chain().focus().splitCell().run();
+              setContextMenu(null);
+            }}
+            disabled={!editor?.can().splitCell()}
+            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+          >
+            <Rows className="w-4 h-4" />
+            <span>拆分单元格</span>
+          </button>
+          <div className="px-3 py-2 text-xs text-gray-500 border-t">
+            单元格背景色
+          </div>
+          <div className="px-3 pb-3 flex flex-wrap gap-2">
+            {['#ffffff', '#fef3c7', '#e0f2fe', '#ecfeff', '#f3e8ff', '#fee2e2', '#dcfce7', '#e5e7eb'].map(
+              (color) => (
+                <button
+                  key={color}
+                  onClick={() => {
+                    setCellBackground(color === '#ffffff' ? null : color);
+                    setContextMenu(null);
+                  }}
+                  className={`w-6 h-6 rounded border ${contextMenu.cellBackground === color ? 'ring-2 ring-primary-500' : 'border-gray-300'}`}
+                  style={{ backgroundColor: color }}
+                  title={color === '#ffffff' ? '默认' : color}
+                />
+              )
+            )}
+            <button
+              onClick={() => {
+                setCellBackground(null);
+                setContextMenu(null);
+              }}
+              className="px-2 py-1 text-xs border rounded text-gray-700 hover:bg-gray-100"
+            >
+              重置
+            </button>
+          </div>
         </div>
       )}
       {/* 选择菜单：只在没有 activeDataSourcePanel 时显示（例如从右键菜单触发时） */}
