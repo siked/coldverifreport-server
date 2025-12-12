@@ -68,10 +68,15 @@ export const useBasicMode = ({
         typeof selectedXAxis.min === 'number' &&
         typeof selectedXAxis.max === 'number'
       ) {
-        const start = Math.min(selectedXAxis.min, selectedXAxis.max);
-        const end = Math.max(selectedXAxis.min, selectedXAxis.max);
+        const startRaw = Math.min(selectedXAxis.min, selectedXAxis.max);
+        const endRaw = Math.max(selectedXAxis.min, selectedXAxis.max);
+        // 对齐到分钟：起始向下取整到整分，结束向上取整到整分
+        const floorToMinute = (v: number) => Math.floor(v / 60000) * 60000;
+        const ceilToMinute = (v: number) => Math.ceil(v / 60000) * 60000;
+        const start = floorToMinute(startRaw);
+        const end = ceilToMinute(endRaw);
         
-        // 立即设置选择范围
+        // 立即设置选择范围（只保留到分）
         setSelectionRange({ start, end });
         
         // 使用双重 requestAnimationFrame 确保在下一个渲染周期添加 plotBand
@@ -97,10 +102,10 @@ export const useBasicMode = ({
         });
         
         console.log(
-          '[CurveChartPanel] selection range:',
-          new Date(start).toISOString(),
+          '[CurveChartPanel] selection range (minute aligned):',
+          new Date(start),start,
           '-',
-          new Date(end).toISOString()
+          new Date(end),end
         );
       }
       // 返回 false 阻止默认的缩放行为，但我们通过 plotBand 手动显示选择区域

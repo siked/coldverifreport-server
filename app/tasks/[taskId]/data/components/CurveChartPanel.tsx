@@ -100,12 +100,12 @@ const CurveChartPanel = ({
     [applyDeviceDataUpdate]
   );
 
-  // 计算所有数据的时间范围（加上8小时偏移）
+  // 计算所有数据的时间范围（使用原始时间戳）
   const dataTimeRange = useMemo(() => {
     const allTimestamps = renderDeviceIds.flatMap((deviceId) => {
       const dataset = deviceDataMap[deviceId] || [];
       return dataset
-        .map((item) => new Date(item.timestamp).getTime() + 8 * 60 * 60 * 1000)
+        .map((item) => new Date(item.timestamp).getTime())
         .filter((ts) => Number.isFinite(ts));
     });
     if (allTimestamps.length === 0) {
@@ -294,6 +294,17 @@ const CurveChartPanel = ({
 
   const MIN_BUCKET_DURATION_MS = 1000 * 30;
 
+  // 格式化到分钟（不显示秒）
+  const formatToMinute = (ms: number) => {
+    const d = new Date(ms);
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    return `${y}-${m}-${day} ${hh}:${mm}`;
+  };
+
   const rawChartSeriesData = useMemo(
     () =>
       renderDeviceIds.map((deviceId) => {
@@ -302,8 +313,7 @@ const CurveChartPanel = ({
           deviceId,
           points: dataset
             .map((item) => ({
-              // 加上8小时偏移（UTC+8）
-              timestamp: new Date(item.timestamp).getTime() + 8 * 60 * 60 * 1000,
+              timestamp: new Date(item.timestamp).getTime(),
               temperature: item.temperature,
               humidity: item.humidity,
             }))
@@ -436,13 +446,15 @@ const CurveChartPanel = ({
           selection: mode === 'basic' ? basicMode.handleChartSelection : undefined,
         },
       },
+      time: {
+        useUTC: false,
+      },
       title: { text: undefined },
       xAxis: {
         type: 'datetime',
         title: { text: '时间' },
         // 设置 softMin 和 softMax 来告诉 scrollbar 完整的数据范围
         // 这样 scrollbar 才能正确显示当前视图范围相对于总数据范围的比例
-        // dataTimeRange 已经包含了8小时偏移
         softMin: dataTimeRange.min > 0 ? dataTimeRange.min : undefined,
         softMax: dataTimeRange.max > 0 ? dataTimeRange.max : undefined,
         events: {
@@ -614,11 +626,11 @@ const CurveChartPanel = ({
                   <p className="text-xs text-gray-500">
                     最近框选时间：
                     <span className="font-medium text-gray-700">
-                      {new Date(basicMode.selectionRange.start).toLocaleString('zh-CN')}
+                      {formatToMinute(basicMode.selectionRange.start)}
                     </span>
                     <span className="mx-1 text-gray-400">~</span>
                     <span className="font-medium text-gray-700">
-                      {new Date(basicMode.selectionRange.end).toLocaleString('zh-CN')}
+                      {formatToMinute(basicMode.selectionRange.end)}
                     </span>
                   </p>
                   <div className="flex flex-wrap gap-2 text-xs">

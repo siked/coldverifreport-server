@@ -16,6 +16,7 @@ import CurveChartPanel from './components/CurveChartPanel';
 import TrendGenerator from './components/TrendGenerator';
 import { ArrowLeft, Plus, Trash2, Edit2, Upload, Save, Trash, Database, Loader2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { useTaskDataLayer } from './hooks/useTaskDataLayer';
 import {
   loadFromCache,
   saveToCache,
@@ -23,9 +24,7 @@ import {
   clearTaskCache,
   clearAllCache,
   getAllCachedData,
-  getCacheStats,
   getCachedDevices,
-  getCachedDeviceCounts,
   type TemperatureHumidityData as CacheData,
 } from '@/lib/cache';
 import LZString from 'lz-string';
@@ -62,6 +61,7 @@ type ChartPoint = {
 const DEFAULT_BACKUP_REMARK = '上传前自动备份';
 const CHART_COLOR_PALETTE = ['#3b82f6', '#10b981', '#f97316', '#a855f7', '#ec4899', '#0ea5e9'];
 const LIST_BATCH_SIZE = 400;
+const CACHE_IMPORT_BATCH_SIZE = 200; // 较小批次，提升 UI 进度刷新
 const MAX_CHART_POINTS = 1500;
 const DETAIL_RANGE_THRESHOLD_MS = 1000 * 60 * 30; // 30 分钟范围内展示完整数据
 const MIN_BUCKET_DURATION_MS = 1000 * 30; // 聚合桶最小跨度 30 秒
@@ -79,11 +79,8 @@ export default function TaskDataPage() {
   const router = useRouter();
   const taskId = params.taskId as string;
 
-  const [task, setTask] = useState<Task | null>(null);
-  const [devices, setDevices] = useState<Device[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [renderDeviceIds, setRenderDeviceIds] = useState<string[]>([]);
-  const [deviceDataMap, setDeviceDataMap] = useState<Record<string, TemperatureHumidityData[]>>({});
   const [selectionPreviewIds, setSelectionPreviewIds] = useState<string[]>([]);
   const [selectionPreviewMode, setSelectionPreviewMode] = useState<'add' | 'remove' | null>(null);
   const [data, setData] = useState<TemperatureHumidityData[]>([]);
@@ -108,6 +105,16 @@ export default function TaskDataPage() {
   const [importStep, setImportStep] = useState<'file' | 'mapping'>('file');
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importData, setImportData] = useState<any[][]>([]);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importProgress, setImportProgress] = useState<{
+    stage: string;
+    processed: number;
+    total: number;
+  }>({
+    stage: '',
+    processed: 0,
+    total: 0,
+  });
   const [columnMapping, setColumnMapping] = useState<{
     deviceId: string;
     temperature: string;
@@ -130,17 +137,8 @@ export default function TaskDataPage() {
     current: 0,
     total: 0,
   });
-  const [cacheStats, setCacheStats] = useState<{
-    deviceCount: number;
-    totalDataCount: number;
-    cacheSize: number;
-  } | null>(null);
-  const [cachedDeviceIds, setCachedDeviceIds] = useState<string[]>([]);
-  const [cachedCounts, setCachedCounts] = useState<Record<string, number>>({});
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const [isClearingCache, setIsClearingCache] = useState(false);
-  const [loadingDeviceIds, setLoadingDeviceIds] = useState<string[]>([]);
-  const [isCachingAll, setIsCachingAll] = useState(false);
   const [leftTab, setLeftTab] = useState<'devices' | 'history'>('devices');
   const [backups, setBackups] = useState<TaskBackup[]>([]);
   const [isBackupsLoading, setIsBackupsLoading] = useState(false);
@@ -228,11 +226,47 @@ export default function TaskDataPage() {
     [deviceIdCollator]
   );
 
+  const {
+    task,
+    devices,
+    setDevices,
+    deviceDataMap,
+    setDeviceDataMap,
+    cacheStats,
+    cachedDeviceIds,
+    setCachedDeviceIds,
+    cachedCounts,
+    setCachedCounts,
+    loadingDeviceIds,
+    isCachingAll,
+    applyDeviceDataUpdate,
+    updateCacheStats,
+    fetchTask,
+    fetchDevices,
+    fetchDeviceData,
+    handleCacheAllDevices,
+  } = useTaskDataLayer({
+    taskId,
+    setAlert,
+    sortDeviceList,
+    onDeviceDataUpdated: (deviceId, sorted) => {
+      if (selectedDeviceId === deviceId) {
+        setData(sorted);
+      }
+    },
+  });
+
   useEffect(() => {
     fetchTask();
-    fetchDevices();
+    fetchDevices().then((mergedDevices) => {
+      if (mergedDevices && mergedDevices.length > 0 && !selectedDeviceId) {
+        const firstId = mergedDevices[0].deviceId;
+        setSelectedDeviceId(firstId);
+        setRenderDeviceIds((prev) => (prev.length > 0 ? prev : [firstId]));
+      }
+    });
     updateCacheStats();
-  }, [taskId]);
+  }, [fetchDevices, fetchTask, selectedDeviceId, taskId, updateCacheStats]);
 
   // 加载并保存设备名称映射（仅保存在本地浏览器）
   useEffect(() => {
@@ -574,16 +608,6 @@ export default function TaskDataPage() {
     fetchBackups();
   }, [taskId]);
 
-  // 更新缓存统计 + 缓存设备清单
-  const updateCacheStats = async () => {
-    const stats = await getCacheStats(taskId);
-    setCacheStats(stats);
-    const cachedIds = await getCachedDevices(taskId);
-    setCachedDeviceIds(cachedIds);
-    const counts = await getCachedDeviceCounts(taskId);
-    setCachedCounts(counts);
-  };
-
   const fetchBackups = async () => {
     setIsBackupsLoading(true);
     try {
@@ -675,7 +699,7 @@ export default function TaskDataPage() {
       setData([]);
       await updateCacheStats();
       await fetchDevices();
-      const cacheResult = await handleCacheAllDevices({ silent: true });
+      const cacheResult = await handleCacheAllDevices(undefined, { silent: true });
       const cachedDevicesCount = cacheResult?.successCount ?? 0;
       const cacheMessage =
         cachedDevicesCount > 0 ? `，并缓存 ${cachedDevicesCount} 个设备数据` : '';
@@ -716,141 +740,6 @@ export default function TaskDataPage() {
         message: error.message || '备份创建失败',
         type: 'error',
       });
-    }
-  };
-
-  const fetchTask = async () => {
-    try {
-      const res = await fetch('/api/tasks');
-      if (res.ok) {
-        const result = await res.json();
-        const foundTask = result.tasks.find((t: Task) => t._id === taskId);
-        if (foundTask) {
-          setTask(foundTask);
-        } else {
-          setAlert({ isOpen: true, message: '任务不存在', type: 'error' });
-        }
-      }
-    } catch (error) {
-      console.error('获取任务失败:', error);
-    }
-  };
-
-  const fetchDevices = async () => {
-    // 先从缓存获取设备列表
-    const cachedDevices = await getCachedDevices(taskId);
-    setCachedDeviceIds(cachedDevices);
-    setCachedDeviceIds(cachedDevices);
-    const cachedDeviceList: Device[] = cachedDevices.map((deviceId) => ({
-      deviceId,
-      createdAt: new Date().toISOString(),
-    }));
-
-    try {
-      // 从服务器获取设备列表
-      const res = await fetch(`/api/tasks/${taskId}/data?type=devices`);
-      if (res.ok) {
-        const result = await res.json();
-        const serverDevices: Device[] = (result.devices || []);
-        
-        // 合并服务器和缓存的设备列表（去重）
-        const deviceMap = new Map<string, Device>();
-        
-        // 先添加服务器设备
-        serverDevices.forEach((device: Device) => {
-          deviceMap.set(device.deviceId, device);
-        });
-        
-        // 再添加缓存设备（如果服务器没有）
-        cachedDeviceList.forEach((device) => {
-          if (!deviceMap.has(device.deviceId)) {
-            deviceMap.set(device.deviceId, device);
-          }
-        });
-        
-        const mergedDevices = sortDeviceList(Array.from(deviceMap.values()));
-        setDevices(mergedDevices);
-        
-        // 如果有设备，默认选择并渲染第一个
-        if (mergedDevices.length > 0 && !selectedDeviceId) {
-          const firstId = mergedDevices[0].deviceId;
-          setSelectedDeviceId(firstId);
-          setRenderDeviceIds((prev) => (prev.length > 0 ? prev : [firstId]));
-        }
-      } else {
-        // 如果服务器请求失败，至少使用缓存设备
-        if (cachedDeviceList.length > 0) {
-          setDevices(sortDeviceList(cachedDeviceList));
-          if (!selectedDeviceId) {
-            const firstId = cachedDeviceList[0].deviceId;
-            setSelectedDeviceId(firstId);
-            setRenderDeviceIds((prev) => (prev.length > 0 ? prev : [firstId]));
-          }
-        }
-      }
-    } catch (error) {
-      console.error('获取设备列表失败:', error);
-      // 如果服务器请求失败，至少使用缓存设备
-      if (cachedDeviceList.length > 0) {
-        setDevices(sortDeviceList(cachedDeviceList));
-        if (!selectedDeviceId) {
-          const firstId = cachedDeviceList[0].deviceId;
-          setSelectedDeviceId(firstId);
-          setRenderDeviceIds((prev) => (prev.length > 0 ? prev : [firstId]));
-        }
-      }
-    }
-  };
-
-  const applyDeviceDataUpdate = (deviceId: string, dataset: TemperatureHumidityData[]) => {
-    const sorted = [...dataset].sort(
-      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-    );
-    setDeviceDataMap((prev) => ({
-      ...prev,
-      [deviceId]: sorted,
-    }));
-    if (selectedDeviceId === deviceId) {
-      setData(sorted);
-    }
-  };
-
-  const setDeviceLoadingState = (deviceId: string, loading: boolean) => {
-    setLoadingDeviceIds((prev) => {
-      const exists = prev.includes(deviceId);
-      if (loading && !exists) {
-        return [...prev, deviceId];
-      }
-      if (!loading && exists) {
-        return prev.filter((id) => id !== deviceId);
-      }
-      return prev;
-    });
-  };
-
-  const fetchDeviceData = async (deviceId: string, forceRefresh = false) => {
-    if (!deviceId) return;
-
-    const performCacheLoad = async () => {
-      if (forceRefresh) return false;
-      const cachedData = await loadFromCache(taskId, deviceId);
-      if (cachedData) {
-        applyDeviceDataUpdate(deviceId, cachedData);
-        return true;
-      }
-      return false;
-    };
-
-    setDeviceLoadingState(deviceId, true);
-
-    try {
-      const loadedFromCache = await performCacheLoad();
-      if (loadedFromCache) {
-        return;
-      }
-      await syncFromServer(deviceId);
-    } finally {
-      setDeviceLoadingState(deviceId, false);
     }
   };
 
@@ -1029,25 +918,6 @@ export default function TaskDataPage() {
   );
   const hasMoreRows = visibleRowCount < data.length;
 
-  // 从服务器同步数据
-  const syncFromServer = async (deviceId: string) => {
-    if (!deviceId) return;
-
-    try {
-      const res = await fetch(`/api/tasks/${taskId}/data?deviceId=${deviceId}`);
-      if (res.ok) {
-        const result = await res.json();
-        const serverData = result.data || [];
-        applyDeviceDataUpdate(deviceId, serverData);
-        // 保存到缓存（即使是空数组也保存，避免重复请求）
-        await saveToCache(taskId, deviceId, serverData);
-        await updateCacheStats();
-      }
-    } catch (error) {
-      console.error('获取数据失败:', error);
-    }
-  };
-
   const handleOpenCreateDeviceDialog = () => {
     setCreateDeviceInput('');
     setCreateDeviceError(null);
@@ -1217,67 +1087,8 @@ export default function TaskDataPage() {
     ]
   );
 
-  const handleCacheAllDevices = async (options: { silent?: boolean } = {}) => {
-    const { silent = false } = options;
-    if (isCachingAll) return { successCount: 0 };
-
-    setIsCachingAll(true);
-    try {
-      const devicesToCache = await getCachedDevices(taskId);
-      const uniqueDeviceIds = Array.from(
-        new Set([...devices.map((d) => d.deviceId), ...devicesToCache])
-      );
-
-      if (uniqueDeviceIds.length === 0) {
-        if (!silent) {
-          setAlert({ isOpen: true, message: '没有设备可缓存', type: 'info' });
-        }
-        return { successCount: 0 };
-      }
-
-      let successCount = 0;
-      for (const deviceId of uniqueDeviceIds) {
-        try {
-          setDeviceLoadingState(deviceId, true);
-          const res = await fetch(`/api/tasks/${taskId}/data?deviceId=${deviceId}`);
-          if (res.ok) {
-            const result = await res.json();
-            const serverData = result.data || [];
-            await saveToCache(taskId, deviceId, serverData);
-            applyDeviceDataUpdate(deviceId, serverData);
-            setCachedDeviceIds((prev) =>
-              prev.includes(deviceId) ? prev : [...prev, deviceId]
-            );
-            setCachedCounts((prev) => ({
-              ...prev,
-              [deviceId]: serverData.length,
-            }));
-            successCount++;
-          }
-        } catch (error) {
-          console.error(`缓存设备 ${deviceId} 数据失败:`, error);
-        } finally {
-          setDeviceLoadingState(deviceId, false);
-        }
-      }
-
-      await updateCacheStats();
-      if (!silent) {
-        setAlert({
-          isOpen: true,
-          message: `已缓存 ${successCount} 个设备的数据到本地`,
-          type: 'success',
-        });
-      }
-      return { successCount };
-    } catch (error) {
-      if (!silent) {
-        setAlert({ isOpen: true, message: '缓存设备数据失败', type: 'error' });
-      }
-      return { successCount: 0 };
-    } finally {
-      setIsCachingAll(false);
-    }
+  const logImportStep = (...args: any[]) => {
+    console.info('[Import]', ...args);
   };
 
   const handleEdit = (item: TemperatureHumidityData) => {
@@ -1506,6 +1317,10 @@ export default function TaskDataPage() {
 
   // 处理导入提交
   const handleImportSubmit = async () => {
+    if (isImporting) {
+      return;
+    }
+
     if (!columnMapping.deviceId || !columnMapping.temperature || !columnMapping.humidity || !columnMapping.timestamp) {
       setAlert({ isOpen: true, message: '请选择所有必需的列映射', type: 'warning' });
       return;
@@ -1571,108 +1386,203 @@ export default function TaskDataPage() {
       return;
     }
 
-    // 解析数据
-    const parsedData: Array<{
-      deviceId: string;
-      temperature: number;
-      humidity: number;
-      timestamp: string;
-    }> = [];
-
-    for (let i = dataStartRow; i < importData.length; i++) {
-      const row = importData[i];
-      const deviceId = String(row[deviceIndex] || '').trim();
-      const tempValue = row[tempIndex];
-      const humidityValue = row[humidityIndex];
-      const timestampValue = row[timestampIndex];
-
-      if (!deviceId || tempValue === undefined || tempValue === null || humidityValue === undefined || humidityValue === null || !timestampValue) {
-        continue; // 跳过空行
-      }
-
-      // 转换温湿度为带一位小数的浮点数
-      const temperature = parseFloat(String(tempValue));
-      const humidity = parseFloat(String(humidityValue));
-
-      if (isNaN(temperature) || isNaN(humidity)) {
-        continue; // 跳过无效数据
-      }
-
-      // 保留一位小数
-      const temperatureRounded = Math.round(temperature * 10) / 10;
-      const humidityRounded = Math.round(humidity * 10) / 10;
-
-      // 解析时间
-      const timestamp = parseTimestamp(timestampValue);
-      if (!timestamp) {
-        continue; // 跳过无效时间
-      }
-
-      parsedData.push({
-        deviceId,
-        temperature: temperatureRounded,
-        humidity: humidityRounded,
-        timestamp: timestamp.toISOString(),
-      });
-    }
-
-    if (parsedData.length === 0) {
-      setAlert({ isOpen: true, message: '没有有效数据可导入', type: 'warning' });
-      return;
-    }
-
-    // 将数据添加到缓存（不上传服务器）
+    setIsImporting(true);
+    const totalRows = Math.max(importData.length - dataStartRow, 0);
+    logImportStep('start', { totalRows, dataStartRow, mapping: columnMapping });
+    setImportProgress({
+      stage: '解析中',
+      processed: 0,
+      total: totalRows,
+    });
     try {
-      const dataWithTaskId: CacheData[] = parsedData.map((item) => ({
-        ...item,
-        taskId,
-      }));
-      await addToCache(taskId, dataWithTaskId);
-      await updateCacheStats();
+      // 解析数据
+      const parsedData: Array<{
+        deviceId: string;
+        temperature: number;
+        humidity: number;
+        timestamp: string;
+      }> = [];
 
-      // 更新设备列表（从缓存获取）
-      await fetchDevices();
-      const affectedDeviceIds = Array.from(new Set(parsedData.map((item) => item.deviceId)));
-      for (const deviceId of affectedDeviceIds) {
-        const cachedDataForDevice = await loadFromCache(taskId, deviceId);
-        if (cachedDataForDevice) {
-          applyDeviceDataUpdate(deviceId, cachedDataForDevice);
+      for (let i = dataStartRow; i < importData.length; i++) {
+        const row = importData[i];
+        const deviceId = String(row[deviceIndex] || '').trim();
+        const tempValue = row[tempIndex];
+        const humidityValue = row[humidityIndex];
+        const timestampValue = row[timestampIndex];
+
+        if (!deviceId || tempValue === undefined || tempValue === null || humidityValue === undefined || humidityValue === null || !timestampValue) {
+          continue; // 跳过空行
+        }
+
+        // 转换温湿度为带一位小数的浮点数
+        const temperature = parseFloat(String(tempValue));
+        const humidity = parseFloat(String(humidityValue));
+
+        if (isNaN(temperature) || isNaN(humidity)) {
+          continue; // 跳过无效数据
+        }
+
+        // 保留一位小数
+        const temperatureRounded = Math.round(temperature * 10) / 10;
+        const humidityRounded = Math.round(humidity * 10) / 10;
+
+        // 解析时间
+        const timestamp = parseTimestamp(timestampValue);
+        if (!timestamp) {
+          continue; // 跳过无效时间
+        }
+
+        parsedData.push({
+          deviceId,
+          temperature: temperatureRounded,
+          humidity: humidityRounded,
+          timestamp: timestamp.toISOString(),
+        });
+
+        // 更新进度（每 200 行刷新一次，避免频繁 setState）
+        const processed = parsedData.length;
+        if (processed % 200 === 0 || processed === totalRows) {
+          setImportProgress({
+            stage: '解析中',
+            processed,
+            total: Math.max(totalRows, processed),
+          });
+          if (processed % 2000 === 0 || processed === totalRows) {
+            logImportStep('parsing', { processed, total: totalRows });
+          }
         }
       }
-      
-      // 如果当前选中的设备有导入的数据，更新状态
-      if (selectedDeviceId) {
-        const cachedData = await loadFromCache(taskId, selectedDeviceId);
-        if (cachedData) {
-          applyDeviceDataUpdate(selectedDeviceId, cachedData);
-        }
-      } else {
-        // 如果没有选中设备，自动选择第一个设备
-        const cachedDevices = await getCachedDevices(taskId);
-        if (cachedDevices.length > 0) {
-          const firstId = cachedDevices[0];
-          setSelectedDeviceId(firstId);
-          setRenderDeviceIds((prev) => (prev.includes(firstId) ? prev : [...prev, firstId]));
-        }
+
+      if (parsedData.length === 0) {
+        logImportStep('parsed empty');
+        setAlert({ isOpen: true, message: '没有有效数据可导入', type: 'warning' });
+        return;
       }
 
-      setShowImportDialog(false);
-      setImportStep('file');
-      setImportFile(null);
-      setImportData([]);
-      setColumnMapping({
-        deviceId: '',
-        temperature: '',
-        humidity: '',
-        timestamp: '',
-      });
-      setAlert({
-        isOpen: true,
-        message: `成功导入 ${parsedData.length} 条数据到本地缓存，请点击"保存到服务器"按钮上传`,
-        type: 'success',
-      });
-    } catch (error) {
-      setAlert({ isOpen: true, message: '导入失败', type: 'error' });
+      logImportStep('parsed done', { validRows: parsedData.length });
+
+      // 将数据添加到缓存（不上传服务器）
+      try {
+        const dataWithTaskId: CacheData[] = parsedData.map((item) => ({
+          ...item,
+          taskId,
+        }));
+
+        // 先按设备分组，一次性合并写入，避免 addToCache 内部频繁读写导致卡顿
+        const grouped = dataWithTaskId.reduce<Map<string, CacheData[]>>((map, item) => {
+          const list = map.get(item.deviceId) || [];
+          list.push(item);
+          map.set(item.deviceId, list);
+          return map;
+        }, new Map());
+
+        setImportProgress({
+          stage: '写入缓存…',
+          processed: 0,
+          total: grouped.size,
+        });
+
+        const yieldToUI = async () => {
+          await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+        };
+        await yieldToUI();
+
+        logImportStep('write per device start', {
+          deviceCount: grouped.size,
+          totalRows: dataWithTaskId.length,
+        });
+
+        let processedDevices = 0;
+        for (const [deviceId, deviceRows] of grouped.entries()) {
+          const t0 = performance.now();
+          logImportStep('write device start', {
+            deviceId,
+            newRows: deviceRows.length,
+          });
+
+          // 读取已缓存数据并合并
+          const existingData = (await loadFromCache(taskId, deviceId)) || [];
+          const merged = [...existingData, ...deviceRows].sort(
+            (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+          );
+
+          await saveToCache(taskId, deviceId, merged);
+
+          const t1 = performance.now();
+          processedDevices += 1;
+          setImportProgress({
+            stage: '写入缓存…',
+            processed: processedDevices,
+            total: grouped.size,
+          });
+          logImportStep('write device done', {
+            deviceId,
+            newRows: deviceRows.length,
+            existingRows: existingData.length,
+            mergedRows: merged.length,
+            processedDevices,
+            totalDevices: grouped.size,
+            durationMs: Math.round(t1 - t0),
+          });
+          await yieldToUI();
+        }
+
+        logImportStep('write cache done');
+
+        setImportProgress({
+          stage: '刷新界面…',
+          processed: grouped.size,
+          total: grouped.size,
+        });
+        await updateCacheStats();
+
+        // 更新设备列表（从缓存获取）
+        await fetchDevices();
+        const affectedDeviceIds = Array.from(new Set(parsedData.map((item) => item.deviceId)));
+        for (const deviceId of affectedDeviceIds) {
+          const cachedDataForDevice = await loadFromCache(taskId, deviceId);
+          if (cachedDataForDevice) {
+            applyDeviceDataUpdate(deviceId, cachedDataForDevice);
+          }
+        }
+        
+        // 如果当前选中的设备有导入的数据，更新状态
+        if (selectedDeviceId) {
+          const cachedData = await loadFromCache(taskId, selectedDeviceId);
+          if (cachedData) {
+            applyDeviceDataUpdate(selectedDeviceId, cachedData);
+          }
+        } else {
+          // 如果没有选中设备，自动选择第一个设备
+          const cachedDevices = await getCachedDevices(taskId);
+          if (cachedDevices.length > 0) {
+            const firstId = cachedDevices[0];
+            setSelectedDeviceId(firstId);
+            setRenderDeviceIds((prev) => (prev.includes(firstId) ? prev : [...prev, firstId]));
+          }
+        }
+
+        setShowImportDialog(false);
+        setImportStep('file');
+        setImportFile(null);
+        setImportData([]);
+        setColumnMapping({
+          deviceId: '',
+          temperature: '',
+          humidity: '',
+          timestamp: '',
+        });
+        setAlert({
+          isOpen: true,
+          message: `成功导入 ${parsedData.length} 条数据到本地缓存，请点击"保存到服务器"按钮上传`,
+          type: 'success',
+        });
+      } catch (error) {
+        setAlert({ isOpen: true, message: '导入失败', type: 'error' });
+      }
+    } finally {
+      setIsImporting(false);
+      setImportProgress({ stage: '', processed: 0, total: 0 });
     }
   };
 
@@ -2902,7 +2812,9 @@ const collectSelectionData = useCallback(
                       setAlert={setAlert}
                       applyDeviceDataUpdate={applyDeviceDataUpdate}
                       updateCacheStats={updateCacheStats}
-                      fetchDevices={fetchDevices}
+                      fetchDevices={async () => {
+                        await fetchDevices();
+                      }}
                     />
                   )}
                 </div>
@@ -3254,6 +3166,36 @@ const collectSelectionData = useCallback(
               <div className="p-6">
                 <h2 className="text-xl font-bold text-gray-800 mb-4">导入数据</h2>
 
+                {isImporting && (
+                  <div className="mb-4 rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-700 flex items-center justify-between">
+                    <div className="flex-1">
+                      <p className="font-medium">
+                        {importProgress.stage || '导入中…'}
+                      </p>
+                      <p className="text-xs text-blue-600 mt-1">
+                        {importProgress.total > 0
+                          ? `已处理 ${importProgress.processed}/${importProgress.total} 行`
+                          : '正在准备数据…'}
+                      </p>
+                    </div>
+                    {importProgress.total > 0 && (
+                      <div className="w-36 bg-blue-100 h-2 rounded-full ml-4">
+                        <div
+                          className="h-2 rounded-full bg-blue-500 transition-all"
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              Math.round(
+                                (importProgress.processed / Math.max(importProgress.total, 1)) * 100
+                              )
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {importStep === 'mapping' && importData.length > 0 && (
                   <div className="space-y-4">
                     <p className="text-gray-600 mb-4">请选择各列对应的字段（第一行为表头）：</p>
@@ -3385,9 +3327,11 @@ const collectSelectionData = useCallback(
                       <button
                         type="button"
                         onClick={handleImportSubmit}
-                        className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
+                        disabled={isImporting}
+                        className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 disabled:bg-primary-300 disabled:cursor-not-allowed inline-flex items-center gap-2"
                       >
-                        导入
+                        {isImporting && <Loader2 className="w-4 h-4 animate-spin" />}
+                        {isImporting ? '导入中…' : '导入'}
                       </button>
                     </div>
                   </div>
