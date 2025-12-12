@@ -24,5 +24,16 @@ export interface TerminalBindingConfig {
   searchKeyword?: string;
 }
 
-export type AnalysisTableConfig = DeviceAnalysisConfig | TerminalBindingConfig;
+export interface IntervalDurationConfig {
+  tableType: 'intervalDuration';
+  dataType: 'temperature' | 'humidity';
+  locationTagIds: string[];
+  startTagId?: string;
+  endTagId?: string;
+  upperLimit?: string;
+  lowerLimit?: string;
+  maxRows: number;
+}
+
+export type AnalysisTableConfig = DeviceAnalysisConfig | TerminalBindingConfig | IntervalDurationConfig;
 

@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useRef, useEffect } from 'react';
-import { AnalysisTableConfig, AnalysisTableType, DeviceAnalysisConfig, DeviceAnalysisField, TerminalBindingConfig } from './analysisTypes';
+import { AnalysisTableConfig, AnalysisTableType, DeviceAnalysisConfig, DeviceAnalysisField, TerminalBindingConfig, IntervalDurationConfig } from './analysisTypes';
 import type { TemplateTag } from '../TemplateTagList';
 import { Database, Layers, Link as LinkIcon, Search, X, Palette, ChevronDown, Timer } from 'lucide-react';
 
@@ -32,7 +32,7 @@ const datasetOptions: Array<{
   {
     id: 'intervalDuration',
     name: '区间所用时间分析表',
-    description: '按布点与时间标签，统计达到区间上下限所用时间（示例：温度/湿度）',
+    description: '统计达到上限和下限所用时间，显示区间变化',
     icon: Timer,
   },
 ];
@@ -57,9 +57,22 @@ const defaultTerminalConfig: TerminalBindingConfig = {
   endTagId: undefined,
 };
 
+const defaultIntervalDurationConfig: IntervalDurationConfig = {
+  tableType: 'intervalDuration',
+  dataType: 'temperature',
+  locationTagIds: [],
+  startTagId: undefined,
+  endTagId: undefined,
+  upperLimit: undefined,
+  lowerLimit: undefined,
+  maxRows: 10,
+};
+
 const getDefaultConfig = (type: AnalysisTableType, prev?: AnalysisTableConfig | null): AnalysisTableConfig => {
   if (prev && prev.tableType === type) return prev;
-  return type === 'deviceAnalysis' ? defaultDeviceConfig : defaultTerminalConfig;
+  if (type === 'deviceAnalysis') return defaultDeviceConfig;
+  if (type === 'terminalBinding') return defaultTerminalConfig;
+  return defaultIntervalDurationConfig;
 };
 
 export default function DataSourceAnalysisPanel({
@@ -75,6 +88,9 @@ export default function DataSourceAnalysisPanel({
   );
   const [terminalConfig, setTerminalConfig] = useState<TerminalBindingConfig>(
     getDefaultConfig('terminalBinding', initialConfig) as TerminalBindingConfig
+  );
+  const [intervalDurationConfig, setIntervalDurationConfig] = useState<IntervalDurationConfig>(
+    getDefaultConfig('intervalDuration', initialConfig) as IntervalDurationConfig
   );
   const [showDropdown, setShowDropdown] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState('');
@@ -122,7 +138,14 @@ export default function DataSourceAnalysisPanel({
   };
 
   const handleApply = () => {
-    const config = selectedType === 'deviceAnalysis' ? deviceConfig : terminalConfig;
+    let config: AnalysisTableConfig;
+    if (selectedType === 'deviceAnalysis') {
+      config = deviceConfig;
+    } else if (selectedType === 'terminalBinding') {
+      config = terminalConfig;
+    } else {
+      config = intervalDurationConfig;
+    }
     onApply(config);
   };
 
@@ -257,8 +280,10 @@ export default function DataSourceAnalysisPanel({
                           setSearchKeyword('');
                           if (filteredDatasets[0].id === 'deviceAnalysis') {
                             setDeviceConfig((prev) => ({ ...getDefaultConfig('deviceAnalysis'), ...prev }));
-                          } else {
+                          } else if (filteredDatasets[0].id === 'terminalBinding') {
                             setTerminalConfig((prev) => ({ ...getDefaultConfig('terminalBinding'), ...prev }));
+                          } else {
+                            setIntervalDurationConfig((prev) => ({ ...getDefaultConfig('intervalDuration'), ...prev }));
                           }
                         }
                       }}
@@ -284,8 +309,10 @@ export default function DataSourceAnalysisPanel({
                             setSearchKeyword('');
                             if (item.id === 'deviceAnalysis') {
                               setDeviceConfig((prev) => ({ ...getDefaultConfig('deviceAnalysis'), ...prev }));
-                            } else {
+                            } else if (item.id === 'terminalBinding') {
                               setTerminalConfig((prev) => ({ ...getDefaultConfig('terminalBinding'), ...prev }));
+                            } else {
+                              setIntervalDurationConfig((prev) => ({ ...getDefaultConfig('intervalDuration'), ...prev }));
                             }
                           }}
                           className={`w-full px-3 py-2 text-sm text-left hover:bg-gray-100 transition-colors flex items-center space-x-2 ${
@@ -396,7 +423,7 @@ export default function DataSourceAnalysisPanel({
               </div>
             </div>
           </div>
-        ) : (
+        ) : selectedType === 'terminalBinding' ? (
           <div className="space-y-4">
             <div className="space-y-1">
               <p className="text-xs text-gray-500">数据选择</p>
@@ -452,6 +479,82 @@ export default function DataSourceAnalysisPanel({
               {renderTimeSelector('选择结束时间标签', terminalConfig.endTagId, (id) =>
                 setTerminalConfig((prev) => ({ ...prev, endTagId: id }))
               )}
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <p className="text-xs text-gray-500">数据选择</p>
+              <div className="flex items-center space-x-3 text-sm">
+                <label className="flex items-center space-x-1">
+                  <input
+                    type="radio"
+                    name="interval-data-type"
+                    value="temperature"
+                    checked={intervalDurationConfig.dataType === 'temperature'}
+                    onChange={() => setIntervalDurationConfig((prev) => ({ ...prev, dataType: 'temperature' }))}
+                  />
+                  <span>温度</span>
+                </label>
+                <label className="flex items-center space-x-1">
+                  <input
+                    type="radio"
+                    name="interval-data-type"
+                    value="humidity"
+                    checked={intervalDurationConfig.dataType === 'humidity'}
+                    onChange={() => setIntervalDurationConfig((prev) => ({ ...prev, dataType: 'humidity' }))}
+                  />
+                  <span>湿度</span>
+                </label>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs text-gray-500">选择布点标签（多选，多个布点用 | 分割，标签值不能为空）</p>
+              {renderLocationSelector(intervalDurationConfig.locationTagIds, (ids) => setIntervalDurationConfig((prev) => ({ ...prev, locationTagIds: ids })), true)}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {renderTimeSelector('选择开始时间标签', intervalDurationConfig.startTagId, (id) =>
+                setIntervalDurationConfig((prev) => ({ ...prev, startTagId: id }))
+              )}
+              {renderTimeSelector('选择结束时间标签', intervalDurationConfig.endTagId, (id) =>
+                setIntervalDurationConfig((prev) => ({ ...prev, endTagId: id }))
+              )}
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <p className="text-xs text-gray-500">上限</p>
+                <input
+                  type="text"
+                  value={intervalDurationConfig.upperLimit || ''}
+                  onChange={(e) => setIntervalDurationConfig((prev) => ({ ...prev, upperLimit: e.target.value || undefined }))}
+                  placeholder="输入上限（默认为空）"
+                  className="w-full border rounded px-2 py-1 text-sm"
+                />
+              </div>
+              <div className="space-y-1">
+                <p className="text-xs text-gray-500">下限</p>
+                <input
+                  type="text"
+                  value={intervalDurationConfig.lowerLimit || ''}
+                  onChange={(e) => setIntervalDurationConfig((prev) => ({ ...prev, lowerLimit: e.target.value || undefined }))}
+                  placeholder="输入下限（默认为空）"
+                  className="w-full border rounded px-2 py-1 text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <p className="text-xs text-gray-500">最大行数</p>
+              <input
+                type="number"
+                min="1"
+                value={intervalDurationConfig.maxRows}
+                onChange={(e) => setIntervalDurationConfig((prev) => ({ ...prev, maxRows: parseInt(e.target.value) || 10 }))}
+                className="w-full border rounded px-2 py-1 text-sm"
+              />
             </div>
           </div>
         )}
