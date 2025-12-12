@@ -2200,7 +2200,7 @@ const collectSelectionData = useCallback(
       }
       const selectedData = collectSelectionData(selectionRange, deviceIdFilter);
       if (selectedData.length === 0) {
-        setAlert({ isOpen: true, message: '选中范围内没有数据', type: 'warning' });
+        setAlert({ isOpen: true, message: '选中范围内没有数据'+JSON.stringify(selectionRange), type: 'warning' });
         return;
       }
       const avgTemperature =
