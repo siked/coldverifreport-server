@@ -196,6 +196,43 @@ const PageBreak = Node.create({
   },
 });
 
+// 自定义 Table 扩展，支持数据来源属性与锁定标记
+const CustomTable = Table.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      dataSource: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-source'),
+        renderHTML: (attributes) => (attributes.dataSource ? { 'data-source': attributes.dataSource } : {}),
+      },
+      dataSourceType: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('data-source-type'),
+        renderHTML: (attributes) =>
+          attributes.dataSourceType ? { 'data-source-type': attributes.dataSourceType } : {},
+      },
+      tooltip: {
+        default: null,
+        parseHTML: (element) => element.getAttribute('title'),
+        renderHTML: (attributes) => (attributes.tooltip ? { title: attributes.tooltip } : {}),
+      },
+    };
+  },
+  renderHTML({ HTMLAttributes }) {
+    const attrs = { ...HTMLAttributes };
+    if (attrs.dataSourceType === 'analysisTable') {
+      attrs['data-analysis-locked'] = 'true';
+      attrs.class = `${attrs.class || ''} analysis-table-locked`.trim();
+      // 直接添加内联样式确保黄色边框显示（内联样式优先级最高）
+      const existingStyle = (attrs.style as string) || '';
+      const borderStyle = 'border: 2px solid #facc15; box-shadow: 0 0 0 1px #fef3c7 inset;';
+      attrs.style = existingStyle ? `${existingStyle}; ${borderStyle}` : borderStyle;
+    }
+    return ['table', mergeAttributes(this.options.HTMLAttributes, attrs), ['tbody', 0]];
+  },
+});
+
 // 自定义 TableCell 扩展，支持 style 属性
 const CustomTableCell = TableCell.extend({
   addAttributes() {
@@ -333,6 +370,7 @@ const TEXT_DATA_SOURCE_TYPES: Array<TemplateTag['type']> = [
   'boolean',
 ];
 const IMAGE_DATA_SOURCE_TYPES: Array<TemplateTag['type']> = ['image', 'cda-image'];
+const TIMEZONE_OFFSET_MS = 8 * 60 * 60 * 1000; // 查询前统一加 8 小时偏移
 
 type TagDataSource = {
   type: 'tag';
@@ -363,7 +401,23 @@ type CurveChartDataSource = {
   inputSignature?: string;
 };
 
-type DataSourcePayload = TagDataSource | ApiDataSource | CalculationDataSource | CurveChartDataSource;
+type AnalysisTableDataSource = {
+  type: 'analysisTable';
+  tableType: AnalysisTableType;
+  config: AnalysisTableConfig;
+  summary?: {
+    deviceCount?: number;
+    rowCount?: number;
+  };
+  lastUpdatedAt?: string;
+};
+
+type DataSourcePayload =
+  | TagDataSource
+  | ApiDataSource
+  | CalculationDataSource
+  | CurveChartDataSource
+  | AnalysisTableDataSource;
 
 interface DataSourceMenuState {
   x: number;
@@ -504,6 +558,36 @@ const DATA_SOURCE_STYLES = `
   padding: 10px 40px;
   background: #fff;
 }
+.prose table[data-source-type="analysisTable"],
+table[data-source-type="analysisTable"] {
+  border: 2px solid #facc15 !important;
+  box-shadow: 0 0 0 1px #fef3c7 inset !important;
+}
+.prose table[data-source-type="analysisTable"] td,
+.prose table[data-source-type="analysisTable"] th,
+table[data-source-type="analysisTable"] td,
+table[data-source-type="analysisTable"] th {
+  cursor: pointer !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+}
+.prose table.analysis-table-locked *,
+table.analysis-table-locked * {
+  caret-color: transparent !important;
+  pointer-events: none !important;
+}
+.prose table.analysis-table-locked,
+table.analysis-table-locked {
+  pointer-events: auto !important;
+}
+.prose table.analysis-table-locked td,
+.prose table.analysis-table-locked th,
+table.analysis-table-locked td,
+table.analysis-table-locked th {
+  pointer-events: auto !important;
+}
 @media print {
   @page {
     margin: 0;
@@ -561,6 +645,11 @@ const formatTooltip = (payload: DataSourcePayload): string => {
   }
   if (payload.type === 'curveChart') {
     return `曲线图：${payload.config.dataType === 'temperature' ? '温度' : '湿度'}`;
+  }
+  if (payload.type === 'analysisTable') {
+    return `表格数据来源：${
+      payload.tableType === 'deviceAnalysis' ? '测点设备分析表' : '终端与绑定点分析表'
+    }`;
   }
   return `接口：${payload.name || payload.url}`;
 };
@@ -688,11 +777,75 @@ const formatTagValue = (tag: TemplateTag, formatting?: TagFormattingOption | nul
   return typeof tag.value === 'string' ? tag.value : tag.value?.toString() || '';
 };
 
+const normalizeLocationValues = (raw: any): string[] => {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw.map((v) => String(v).trim()).filter(Boolean);
+  }
+  return String(raw)
+    .split(/[|,，]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+};
+
+const collectLocationValues = (tagIds: string[], tags: TemplateTag[]): string[] => {
+  const values: string[] = [];
+  tagIds.forEach((id) => {
+    const tag = tags.find((t) => (t._id || t.name) === id);
+    if (tag && tag.type === 'location') {
+      values.push(...normalizeLocationValues(tag.value));
+    }
+  });
+  return Array.from(new Set(values.filter(Boolean)));
+};
+
+const parseTagDateValue = (tagId: string | undefined, tags: TemplateTag[], isEnd = false): Date | null => {
+  if (!tagId) return null;
+  const tag = tags.find((t) => (t._id || t.name) === tagId);
+  if (!tag) return null;
+  const raw = tag.value;
+  console.log(`${tag.name} value: ${raw}`);
+  
+  if (raw === undefined || raw === null) return null;
+  const attempt = (input: any) => {
+    if (input instanceof Date) return input;
+    if (typeof input === 'number') return new Date(input);
+    const str = String(input).trim();
+    if (!str) return null;
+    const dateOnlyMatch = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (dateOnlyMatch) {
+      const dt = new Date(`${str}T${isEnd ? '23:59:59.999' : '00:00:00'}`);
+      return Number.isNaN(dt.getTime()) ? null : dt;
+    }
+    const normalized = str.includes('T') ? str : str.replace(' ', 'T');
+    const dt = new Date(normalized);
+    return Number.isNaN(dt.getTime()) ? null : dt;
+  };
+  const parsed = attempt(raw);
+  return parsed ? new Date(parsed) : null;
+};
+
+const formatDateTimeForDisplay = (date: Date) => {
+  const d = new Date(date);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${y}-${m}-${day} ${hh}:${mm}`;
+};
+
+const formatNumber = (value: number | null | undefined, decimals = 2) => {
+  if (value === null || value === undefined || Number.isNaN(value)) return '—';
+  return Number(value).toFixed(decimals);
+};
+
 const generateTempId = () => `temp_${Date.now()}`;
 
 import { marked } from 'marked';
 import TurndownService from 'turndown';
 import imageCompression from 'browser-image-compression';
+import { getTaskDataFromLoki } from '@/lib/lokijs';
 import {
   Bold,
   Heading1,
@@ -736,6 +889,7 @@ import {
 import Modal from './Modal';
 import type { TemplateTag } from './TemplateTagList';
 import DataSourceApiPanel from './tiptap/DataSourceApiPanel';
+import DataSourceAnalysisPanel from './tiptap/DataSourceAnalysisPanel';
 import DataSourceMenu from './tiptap/DataSourceMenu';
 import OutlineSidebar from './tiptap/OutlineSidebar';
 import TagSelectorPanel, { TagFormattingOption, NumberCondition } from './tiptap/TagSelectorPanel';
@@ -744,6 +898,7 @@ import CurveChartConfigPanel, { CurveChartConfig } from './tiptap/CurveChartConf
 import TaskSelectorModal from './tiptap/TaskSelectorModal';
 import type { ApiFormState, ApiTestResult, HeadingItem } from './tiptap/types';
 import { CellSelection } from '@tiptap/pm/tables';
+import { AnalysisTableConfig, AnalysisTableType, DeviceAnalysisField } from './tiptap/analysisTypes';
 
 interface TiptapEditorProps {
   content: string;
@@ -795,7 +950,8 @@ const createTurndown = () => {
       const table = node as HTMLTableElement;
       
       // 检查表格中是否有数据来源标记
-      const hasDataSource = table.querySelector(`span[data-source], img[data-source]`);
+      const hasDataSource =
+        table.hasAttribute('data-source') || table.querySelector(`span[data-source], img[data-source]`);
       
       // 检查表格是否有自定义样式（行间距、padding等）
       const hasCustomStyles = (() => {
@@ -1359,7 +1515,7 @@ const computeCurveChartInputSignature = (
       }),
       HardBreak,
       HorizontalRule,
-      Table.configure({
+      CustomTable.configure({
         resizable: true,
       }),
       CustomTableRow,
@@ -3392,7 +3548,332 @@ const computeCurveChartInputSignature = (
     imagePos?: number;
     isTable?: boolean;
     cellBackground?: string;
+    tablePos?: number;
+    tableHasAnalysis?: boolean;
   } | null>(null);
+  const [analysisPanel, setAnalysisPanel] = useState<{
+    tablePos: number;
+    anchor: { x: number; y: number } | null;
+    existing?: AnalysisTableDataSource | null;
+  } | null>(null);
+  const [isGeneratingAnalysis, setIsGeneratingAnalysis] = useState(false);
+
+  const findTablePosByElement = useCallback(
+    (element: HTMLElement | null) => {
+      if (!editor || !element) return -1;
+      let found = -1;
+      editor.state.doc.descendants((node, pos) => {
+        if (node.type.name === 'table') {
+          const dom = editor.view.nodeDOM(pos) as HTMLElement | null;
+          if (dom && (dom === element || dom.contains(element))) {
+            found = pos;
+            return false;
+          }
+        }
+        return found === -1;
+      });
+      return found;
+    },
+    [editor]
+  );
+
+  const buildAnalysisTable = useCallback(
+    (config: AnalysisTableConfig): { html: string; payload: AnalysisTableDataSource } => {
+      if (!selectedTask?._id) {
+        throw new Error('请先关联任务，再配置表格数据来源');
+      }
+
+      const escapeAttr = (input: string) => input.replace(/"/g, '&quot;');
+
+      if (config.tableType === 'deviceAnalysis') {
+        const fields =
+          config.fields && config.fields.length > 0
+            ? Array.from(new Set(config.fields))
+            : (['deviceId', 'max', 'min', 'avg', 'range'] as DeviceAnalysisField[]);
+        if (!fields.includes('deviceId')) {
+          fields.unshift('deviceId');
+        }
+        const locationValues = collectLocationValues(config.locationTagIds, tags);
+        if (locationValues.length === 0) {
+          throw new Error('请选择布点标签，且标签值不能为空');
+        }
+        const start = parseTagDateValue(config.startTagId, tags, false);
+
+        const end = parseTagDateValue(config.endTagId, tags, true);
+  
+        if (!start || !end) {
+          throw new Error('请设置有效的开始和结束时间标签');
+        }
+        const startQuery = new Date(start.getTime() );
+        const endQuery = new Date(end.getTime() );
+      
+        if (startQuery > endQuery) {
+
+          console.log('开始时间不能晚于结束时间');
+          console.log(startQuery);
+          console.log(endQuery);
+          throw new Error('开始时间不能晚于结束时间');
+
+          
+        }
+
+        const valueKey = config.dataType === 'temperature' ? 'temperature' : 'humidity';
+        const data = getTaskDataFromLoki(selectedTask._id, startQuery, endQuery, locationValues);
+        const rows = locationValues.map((deviceId) => {
+          const items = data.filter((d) => d.deviceId === deviceId);
+          const values = items
+            .map((item) => Number((item as any)[valueKey]))
+            .filter((v) => Number.isFinite(v));
+          const max = values.length ? Math.max(...values) : null;
+          const min = values.length ? Math.min(...values) : null;
+          const avg = values.length ? values.reduce((a, b) => a + b, 0) / values.length : null;
+          const range = max !== null && min !== null ? max - min : null;
+          return { deviceId, max, min, avg, range };
+        });
+
+        // 计算每个字段列的最大值和最小值
+        const columnExtremes: Record<string, { max: number | null; min: number | null }> = {};
+        fields.forEach((f) => {
+          if (f !== 'deviceId') {
+            const values = rows
+              .map((r) => (r as any)[f])
+              .filter((v) => v !== null && v !== undefined && Number.isFinite(v)) as number[];
+            columnExtremes[f] = {
+              max: values.length > 0 ? Math.max(...values) : null,
+              min: values.length > 0 ? Math.min(...values) : null,
+            };
+          }
+        });
+
+        const labelMap: Record<DeviceAnalysisField, string> = {
+          deviceId: '测点编号',
+          max: config.dataType === 'temperature' ? '最高温度' : '最高湿度',
+          min: config.dataType === 'temperature' ? '最低温度' : '最低湿度',
+          avg: config.dataType === 'temperature' ? '平均温度' : '平均湿度',
+          range: config.dataType === 'temperature' ? '温度变化范围' : '湿度变化范围',
+        };
+
+        const payload: AnalysisTableDataSource = {
+          type: 'analysisTable',
+          tableType: 'deviceAnalysis',
+          config: { ...config, fields },
+          summary: { deviceCount: locationValues.length, rowCount: rows.length },
+          lastUpdatedAt: new Date().toISOString(),
+        };
+        const dataSourceAttr = stringifyDataSource(payload);
+        const tooltip = escapeAttr(formatTooltip(payload));
+        const headerHtml = fields.map((f) => `<th>${labelMap[f]}</th>`).join('');
+        const bodyHtml = rows
+          .map((row) => {
+            const cells = fields
+              .map((f) => {
+                const value = (row as any)[f];
+                const display = f === 'deviceId' ? row.deviceId : formatNumber(value);
+                let style = '';
+                // 对每个字段列，找出该列的最大值和最小值，分别用不同颜色标记
+                if (f !== 'deviceId' && value !== null && value !== undefined && Number.isFinite(value)) {
+                  const extremes = columnExtremes[f];
+                  if (extremes) {
+                    // 如果最大值和最小值相同，优先用 maxColor
+                    if (extremes.max !== null && extremes.min !== null && extremes.max === extremes.min && value === extremes.max) {
+                      style = ` style="color: ${config.maxColor || '#ef4444'};"`;
+                    } else {
+                      // 如果值等于该列的最大值，用 maxColor 标记
+                      if (extremes.max !== null && value === extremes.max) {
+                        style = ` style="color: ${config.maxColor || '#ef4444'};"`;
+                      }
+                      // 如果值等于该列的最小值，用 minColor 标记
+                      if (extremes.min !== null && value === extremes.min) {
+                        style = ` style="color: ${config.minColor || '#2563eb'};"`;
+                      }
+                    }
+                  }
+                }
+                return `<td${style}>${display}</td>`;
+              })
+              .join('');
+            return `<tr>${cells}</tr>`;
+          })
+          .join('');
+
+        const html = `<table data-source="${dataSourceAttr}" data-source-type="analysisTable" title="${tooltip}"><thead><tr>${headerHtml}</tr></thead><tbody>${bodyHtml}</tbody></table>`;
+        return { html, payload };
+      }
+
+      // 终端与验证设备并排表
+      const locationTerminal = collectLocationValues(config.terminalTagId ? [config.terminalTagId] : [], tags)[0];
+      const locationValidation = collectLocationValues(config.validationTagId ? [config.validationTagId] : [], tags)[0];
+      if (!locationTerminal || !locationValidation) {
+        throw new Error('请选择终端设备和验证设备标签，并确保其值不为空');
+      }
+      const start = parseTagDateValue(config.startTagId, tags, false);
+      const end = parseTagDateValue(config.endTagId, tags, true);
+      if (!start || !end) {
+        throw new Error('请设置有效的开始和结束时间标签');
+      }
+      const startQuery = new Date(start.getTime() );
+      const endQuery = new Date(end.getTime() );
+      if (startQuery > endQuery) {
+
+        
+        console.log('开始时间不能晚于结束时间');
+        console.log(startQuery);
+        console.log(endQuery);
+        throw new Error('开始时间不能晚于结束时间');
+      }
+
+      const valueKey = config.dataType === 'temperature' ? 'temperature' : 'humidity';
+      const data = getTaskDataFromLoki(selectedTask._id, startQuery, endQuery, [
+        locationTerminal,
+        locationValidation,
+      ]);
+      const sortByTime = (list: any[]) =>
+        [...list].sort(
+          (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+        );
+
+      const terminalData = sortByTime(data.filter((d) => d.deviceId === locationTerminal));
+      const validationData = sortByTime(data.filter((d) => d.deviceId === locationValidation));
+      const maxLen = Math.max(terminalData.length, validationData.length);
+      const pairs: Array<{ terminal?: any; validation?: any }> = [];
+      for (let i = 0; i < maxLen; i++) {
+        pairs.push({
+          terminal: terminalData[i],
+          validation: validationData[i],
+        });
+      }
+
+      const headerLabel = config.dataType === 'temperature' ? '温度' : '湿度';
+      const rows: Array<{ left?: { terminal?: any; validation?: any }; right?: { terminal?: any; validation?: any } }> = [];
+      for (let i = 0; i < pairs.length; i += 2) {
+        rows.push({ left: pairs[i], right: pairs[i + 1] });
+      }
+
+      const buildCells = (entry?: { terminal?: any; validation?: any }) => {
+        const time = entry?.terminal?.timestamp
+          ? formatDateTimeForDisplay(new Date(entry.terminal.timestamp))
+          : entry?.validation?.timestamp
+          ? formatDateTimeForDisplay(new Date(entry.validation.timestamp))
+          : '—';
+        const terminalVal =
+          entry?.terminal && Number.isFinite(Number(entry.terminal[valueKey]))
+            ? formatNumber(Number(entry.terminal[valueKey]))
+            : '—';
+        const validationVal =
+          entry?.validation && Number.isFinite(Number(entry.validation[valueKey]))
+            ? formatNumber(Number(entry.validation[valueKey]))
+            : '—';
+        return { time, terminalVal, validationVal };
+      };
+
+      const bodyHtml =
+        rows.length > 0
+          ? rows
+              .map((row) => {
+                const left = buildCells(row.left);
+                const right = buildCells(row.right);
+                return `<tr><td>${left.time}</td><td>${left.terminalVal}</td><td>${left.validationVal}</td><td>${right.time}</td><td>${right.terminalVal}</td><td>${right.validationVal}</td></tr>`;
+              })
+              .join('')
+          : `<tr><td colspan="6" style="text-align:center;">无数据</td></tr>`;
+
+      const payload: AnalysisTableDataSource = {
+        type: 'analysisTable',
+        tableType: 'terminalBinding',
+        config,
+        summary: { deviceCount: 2, rowCount: rows.length },
+        lastUpdatedAt: new Date().toISOString(),
+      };
+      const dataSourceAttr = stringifyDataSource(payload);
+      const tooltip = escapeAttr(formatTooltip(payload));
+      const headerHtml = `<tr><th>时间</th><th>终端设备</th><th>验证设备</th><th>时间</th><th>终端设备</th><th>验证设备</th></tr>`;
+      const html = `<table data-source="${dataSourceAttr}" data-source-type="analysisTable" title="${tooltip}"><thead>${headerHtml}</thead><tbody>${bodyHtml}</tbody></table>`;
+      return { html, payload };
+    },
+    [selectedTask?._id, tags]
+  );
+
+  const applyAnalysisTable = useCallback(
+    (tablePos: number, config: AnalysisTableConfig) => {
+      if (!editor) return;
+      const target = editor.state.doc.nodeAt(tablePos);
+      if (!target || target.type.name !== 'table') {
+        throw new Error('未找到需要替换的数据表格');
+      }
+      const { html } = buildAnalysisTable(config);
+      editor.chain().focus().insertContentAt({ from: tablePos, to: tablePos + target.nodeSize }, html).run();
+    },
+    [buildAnalysisTable, editor]
+  );
+
+  const refreshAnalysisTables = useCallback(
+    (changed?: TemplateTag[]) => {
+      if (!editor) return;
+      const changedIds = changed?.map((t) => t._id).filter(Boolean) as string[] | undefined;
+      const targets: Array<{ pos: number; payload: AnalysisTableDataSource }> = [];
+      editor.state.doc.descendants((node, pos) => {
+        if (node.type.name === 'table' && node.attrs?.dataSourceType === 'analysisTable' && node.attrs.dataSource) {
+          const payload = parseDataSource(node.attrs.dataSource);
+          if (payload?.type === 'analysisTable') {
+            const config = payload.config;
+            const relatedIds =
+              config.tableType === 'deviceAnalysis'
+                ? [config.startTagId, config.endTagId, ...(config.locationTagIds || [])]
+                : [
+                    config.startTagId,
+                    config.endTagId,
+                    config.terminalTagId,
+                    config.validationTagId,
+                  ];
+            const needUpdate =
+              !changedIds || relatedIds.some((id) => id && changedIds.includes(id));
+            if (needUpdate) {
+              targets.push({ pos, payload });
+            }
+          }
+        }
+        return true;
+      });
+
+      targets.forEach(({ pos, payload }) => {
+        try {
+          applyAnalysisTable(pos, payload.config);
+        } catch (err) {
+          console.warn('刷新表格数据来源失败', err);
+        }
+      });
+    },
+    [applyAnalysisTable, editor]
+  );
+
+  const openAnalysisPanelForTable = useCallback(
+    (tablePos: number, anchor: { x: number; y: number } | null = null) => {
+      if (!editor) return;
+      const node = editor.state.doc.nodeAt(tablePos);
+      if (!node || node.type.name !== 'table') return;
+      const parsed = node.attrs?.dataSource ? parseDataSource(node.attrs.dataSource) : null;
+      setAnalysisPanel({
+        tablePos,
+        anchor,
+        existing: parsed && parsed.type === 'analysisTable' ? (parsed as AnalysisTableDataSource) : null,
+      });
+      setContextMenu(null);
+      setDataSourceMenu(null);
+    },
+    [editor, setContextMenu, setDataSourceMenu]
+  );
+
+  const selectionInAnalysisTable = useCallback(() => {
+    if (!editor) return null;
+    const { $from } = editor.state.selection;
+    for (let depth = $from.depth; depth > 0; depth--) {
+      const node = $from.node(depth);
+      if (node.type.name === 'table' && node.attrs?.dataSourceType === 'analysisTable') {
+        return { pos: $from.before(depth), node };
+      }
+    }
+    return null;
+  }, [editor]);
 
   useEffect(() => {
     if (!editor) return;
@@ -3731,14 +4212,36 @@ const computeCurveChartInputSignature = (
       if (cell) {
         const { $from } = editor.state.selection;
         let isInTable = false;
+        let tablePos = -1;
         for (let i = $from.depth; i > 0; i--) {
           const node = $from.node(i);
           if (node.type.name === 'table') {
             isInTable = true;
+            tablePos = $from.before(i);
             break;
           }
         }
         if (isInTable) {
+          // 检查表格是否有数据来源
+          let tableHasAnalysis = false;
+          if (tablePos >= 0) {
+            const tableNode = editor.state.doc.nodeAt(tablePos);
+            const parsed = tableNode?.attrs?.dataSource ? parseDataSource(tableNode.attrs.dataSource) : null;
+            tableHasAnalysis = Boolean(
+              tableNode?.attrs?.dataSourceType === 'analysisTable' ||
+              (parsed && parsed.type === 'analysisTable')
+            );
+          }
+          
+          // 如果表格有数据来源，直接打开数据来源编辑面板，不显示右键菜单
+          if (tableHasAnalysis && tablePos >= 0) {
+            event.preventDefault();
+            event.stopPropagation();
+            openAnalysisPanelForTable(tablePos, { x: event.clientX, y: event.clientY });
+            return;
+          }
+          
+          // 没有数据来源的表格，显示正常的右键菜单
           event.preventDefault();
           editor.chain().focus().run();
           setContextMenu({
@@ -3748,6 +4251,8 @@ const computeCurveChartInputSignature = (
             cellBackground:
               (cell as HTMLElement).style.backgroundColor ||
               window.getComputedStyle(cell as HTMLElement).backgroundColor,
+            tablePos,
+            tableHasAnalysis,
           });
           return;
         }
@@ -3847,6 +4352,18 @@ const computeCurveChartInputSignature = (
         }
       }
       
+      // 如果点击了绑定数据来源的表格，直接打开编辑面板
+      const tableElement = target.closest('table[data-source-type="analysisTable"]') as HTMLElement | null;
+      if (tableElement) {
+        event.preventDefault();
+        event.stopPropagation();
+        const tablePos = findTablePosByElement(tableElement);
+        if (tablePos >= 0) {
+          openAnalysisPanelForTable(tablePos, { x: event.clientX, y: event.clientY });
+        }
+        return;
+      }
+      
       const dsElement = target.closest(`[${DATA_SOURCE_ELEMENT_ATTR}]`) as HTMLElement | null;
       if (!dsElement) return;
 
@@ -3919,11 +4436,120 @@ const computeCurveChartInputSignature = (
       }
     };
 
+    // 处理双击事件，双击已绑定数据来源的表格时打开编辑面板
+    const handleDoubleClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      
+      // 如果点击的是弹窗内部，不处理
+      if (target.closest('.data-source-popover') || target.closest('.fixed.bg-white.border.rounded-lg.shadow-lg')) {
+        return;
+      }
+      
+      // 检查是否是已绑定数据来源的表格
+      const tableElement = target.closest('table[data-source-type="analysisTable"]') as HTMLElement | null;
+      if (tableElement) {
+        event.preventDefault();
+        event.stopPropagation();
+        const tablePos = findTablePosByElement(tableElement);
+        if (tablePos >= 0) {
+          openAnalysisPanelForTable(tablePos, { x: event.clientX, y: event.clientY });
+        }
+        return;
+      }
+    };
+
     dom.addEventListener('click', handleDataSourceClick);
+    dom.addEventListener('dblclick', handleDoubleClick);
     return () => {
       dom.removeEventListener('click', handleDataSourceClick);
+      dom.removeEventListener('dblclick', handleDoubleClick);
     };
-  }, [editor, getDataSourceAtRange, getDataSourceForImage, hydrateApiForm, resolveRangeFromElement, setCurveChartConfig]);
+  }, [editor, getDataSourceAtRange, getDataSourceForImage, hydrateApiForm, resolveRangeFromElement, setCurveChartConfig, findTablePosByElement, openAnalysisPanelForTable]);
+
+  // 锁定带数据来源的表格，阻止所有编辑操作
+  useEffect(() => {
+    if (!editor) return;
+    const editorDom = editor.view.dom;
+    
+    const isEventInsideEditor = (eventTarget: EventTarget | null) => {
+      if (!eventTarget || !(eventTarget instanceof Node)) return false;
+      return editorDom.contains(eventTarget);
+    };
+    
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!isEventInsideEditor(event.target)) return;
+      const tableInfo = selectionInAnalysisTable();
+      if (!tableInfo) return;
+      // 完全阻止所有键盘输入，包括方向键
+      event.preventDefault();
+      event.stopPropagation();
+      // 对于非导航键，打开数据来源面板
+      const allowKeys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Tab', 'Shift', 'Control', 'Alt', 'Meta', 'Escape'];
+      if (!allowKeys.includes(event.key)) {
+        openAnalysisPanelForTable(tableInfo.pos, null);
+      }
+    };
+    
+    const handleBeforeInput = (event: InputEvent) => {
+      if (!isEventInsideEditor(event.target)) return;
+      const tableInfo = selectionInAnalysisTable();
+      if (tableInfo) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    
+    const handlePaste = (event: ClipboardEvent) => {
+      if (!isEventInsideEditor(event.target)) return;
+      const tableInfo = selectionInAnalysisTable();
+      if (tableInfo) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    
+    // 阻止鼠标选择表格内容（但不阻止点击事件）
+    const handleMouseDown = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+      
+      const tableElement = target.closest('table[data-source-type="analysisTable"]') as HTMLElement | null;
+      if (tableElement) {
+        // 只阻止文本选择，不阻止点击事件（点击事件由 handleDataSourceClick 处理）
+        // 使用 setTimeout 确保在点击事件处理后再清除选择
+        setTimeout(() => {
+          const selection = window.getSelection();
+          if (selection && selection.rangeCount > 0) {
+            const range = selection.getRangeAt(0);
+            const tableRange = tableElement.getBoundingClientRect();
+            const rangeRect = range.getBoundingClientRect();
+            // 如果选择范围在表格内，清除选择
+            if (
+              rangeRect.left >= tableRange.left &&
+              rangeRect.right <= tableRange.right &&
+              rangeRect.top >= tableRange.top &&
+              rangeRect.bottom <= tableRange.bottom
+            ) {
+              selection.removeAllRanges();
+            }
+          }
+        }, 0);
+      }
+    };
+    
+    document.addEventListener('keydown', handleKeyDown, true);
+    document.addEventListener('beforeinput', handleBeforeInput, true);
+    document.addEventListener('paste', handlePaste, true);
+    document.addEventListener('mousedown', handleMouseDown, true);
+    
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown, true);
+      document.removeEventListener('beforeinput', handleBeforeInput, true);
+      document.removeEventListener('paste', handlePaste, true);
+      document.removeEventListener('mousedown', handleMouseDown, true);
+    };
+  }, [editor, openAnalysisPanelForTable, selectionInAnalysisTable]);
 
   useEffect(() => {
     if (!editor) return;
@@ -4091,8 +4717,11 @@ const computeCurveChartInputSignature = (
       }).run();
     }
 
+    // 刷新绑定了数据来源的表格
+    refreshAnalysisTables(changedTags);
+
     prevTagsRef.current = tags;
-  }, [tags, editor, formatTagValue, calculateValue]);
+  }, [tags, editor, formatTagValue, calculateValue, refreshAnalysisTables]);
 
   // 点击外部关闭页眉页脚菜单
   useEffect(() => {
@@ -4116,6 +4745,11 @@ const computeCurveChartInputSignature = (
       // 如果点击的是数据来源弹窗内部，不关闭
       const popover = target.closest('.data-source-popover');
       if (popover) {
+        return;
+      }
+      // 数据来源分析弹窗
+      const analysisPanelEl = target.closest('.data-source-analysis-panel');
+      if (analysisPanelEl) {
         return;
       }
       
@@ -4371,10 +5005,11 @@ const computeCurveChartInputSignature = (
           </div>
           <button
             onClick={() => {
+              if (contextMenu?.tableHasAnalysis) return;
               editor?.chain().focus().addColumnBefore().run();
               setContextMenu(null);
             }}
-            disabled={!editor?.can().addColumnBefore()}
+            disabled={!editor?.can().addColumnBefore() || contextMenu?.tableHasAnalysis}
             className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
           >
             <Plus className="w-4 h-4" />
@@ -4382,10 +5017,11 @@ const computeCurveChartInputSignature = (
           </button>
           <button
             onClick={() => {
+              if (contextMenu?.tableHasAnalysis) return;
               editor?.chain().focus().addColumnAfter().run();
               setContextMenu(null);
             }}
-            disabled={!editor?.can().addColumnAfter()}
+            disabled={!editor?.can().addColumnAfter() || contextMenu?.tableHasAnalysis}
             className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
           >
             <Plus className="w-4 h-4" />
@@ -4393,10 +5029,11 @@ const computeCurveChartInputSignature = (
           </button>
           <button
             onClick={() => {
+              if (contextMenu?.tableHasAnalysis) return;
               editor?.chain().focus().deleteColumn().run();
               setContextMenu(null);
             }}
-            disabled={!editor?.can().deleteColumn()}
+            disabled={!editor?.can().deleteColumn() || contextMenu?.tableHasAnalysis}
             className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
           >
             <Columns className="w-4 h-4" />
@@ -4407,10 +5044,11 @@ const computeCurveChartInputSignature = (
           </div>
           <button
             onClick={() => {
+              if (contextMenu?.tableHasAnalysis) return;
               editor?.chain().focus().addRowBefore().run();
               setContextMenu(null);
             }}
-            disabled={!editor?.can().addRowBefore()}
+            disabled={!editor?.can().addRowBefore() || contextMenu?.tableHasAnalysis}
             className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
           >
             <Plus className="w-4 h-4" />
@@ -4418,10 +5056,11 @@ const computeCurveChartInputSignature = (
           </button>
           <button
             onClick={() => {
+              if (contextMenu?.tableHasAnalysis) return;
               editor?.chain().focus().addRowAfter().run();
               setContextMenu(null);
             }}
-            disabled={!editor?.can().addRowAfter()}
+            disabled={!editor?.can().addRowAfter() || contextMenu?.tableHasAnalysis}
             className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
           >
             <Plus className="w-4 h-4" />
@@ -4429,10 +5068,11 @@ const computeCurveChartInputSignature = (
           </button>
           <button
             onClick={() => {
+              if (contextMenu?.tableHasAnalysis) return;
               editor?.chain().focus().deleteRow().run();
               setContextMenu(null);
             }}
-            disabled={!editor?.can().deleteRow()}
+            disabled={!editor?.can().deleteRow() || contextMenu?.tableHasAnalysis}
             className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
           >
             <Rows className="w-4 h-4" />
@@ -4450,15 +5090,32 @@ const computeCurveChartInputSignature = (
             <Trash2 className="w-4 h-4" />
             <span>删除表格</span>
           </button>
+          <button
+            onClick={() => {
+              if (typeof contextMenu?.tablePos === 'number') {
+                openAnalysisPanelForTable(contextMenu.tablePos, { x: contextMenu.x, y: contextMenu.y });
+              }
+            }}
+            className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 flex items-center space-x-2 border-t mt-1"
+          >
+            <Database className="w-4 h-4" />
+            <span>数据来源</span>
+          </button>
+          {contextMenu?.tableHasAnalysis && (
+            <div className="px-3 py-2 text-xs text-amber-700 bg-amber-50 border-t">
+              已绑定数据来源，表格结构编辑已锁定
+            </div>
+          )}
           <div className="px-3 py-1.5 text-xs font-semibold text-gray-500 border-t border-b mt-1">
             单元格
           </div>
           <button
             onClick={() => {
+              if (contextMenu?.tableHasAnalysis) return;
               editor?.chain().focus().mergeCells().run();
               setContextMenu(null);
             }}
-            disabled={!editor?.can().mergeCells()}
+            disabled={!editor?.can().mergeCells() || contextMenu?.tableHasAnalysis}
             className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
           >
             <Columns className="w-4 h-4" />
@@ -4466,10 +5123,11 @@ const computeCurveChartInputSignature = (
           </button>
           <button
             onClick={() => {
+              if (contextMenu?.tableHasAnalysis) return;
               editor?.chain().focus().splitCell().run();
               setContextMenu(null);
             }}
-            disabled={!editor?.can().splitCell()}
+            disabled={!editor?.can().splitCell() || contextMenu?.tableHasAnalysis}
             className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
           >
             <Rows className="w-4 h-4" />
@@ -4484,10 +5142,11 @@ const computeCurveChartInputSignature = (
                 <button
                   key={color}
                   onClick={() => {
+                    if (contextMenu?.tableHasAnalysis) return;
                     setCellBackground(color === '#ffffff' ? null : color);
                     setContextMenu(null);
                   }}
-                  className={`w-6 h-6 rounded border ${contextMenu.cellBackground === color ? 'ring-2 ring-primary-500' : 'border-gray-300'}`}
+                  className={`w-6 h-6 rounded border ${contextMenu.cellBackground === color ? 'ring-2 ring-primary-500' : 'border-gray-300'} ${contextMenu?.tableHasAnalysis ? 'opacity-50 cursor-not-allowed' : ''}`}
                   style={{ backgroundColor: color }}
                   title={color === '#ffffff' ? '默认' : color}
                 />
@@ -4495,10 +5154,11 @@ const computeCurveChartInputSignature = (
             )}
             <button
               onClick={() => {
+                if (contextMenu?.tableHasAnalysis) return;
                 setCellBackground(null);
                 setContextMenu(null);
               }}
-              className="px-2 py-1 text-xs border rounded text-gray-700 hover:bg-gray-100"
+              className={`px-2 py-1 text-xs border rounded text-gray-700 hover:bg-gray-100 ${contextMenu?.tableHasAnalysis ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
               重置
             </button>
@@ -4705,6 +5365,30 @@ const computeCurveChartInputSignature = (
             setActiveDataSourcePanel(null);
             setDataSourceMenu(null);
             setCurveChartConfig(null);
+          }}
+        />
+      )}
+      {analysisPanel && (
+        <DataSourceAnalysisPanel
+          tags={tags}
+          anchor={
+            analysisPanel.anchor
+              ? { left: analysisPanel.anchor.x, top: analysisPanel.anchor.y }
+              : undefined
+          }
+          initialConfig={analysisPanel.existing?.config || null}
+          onCancel={() => setAnalysisPanel(null)}
+          onApply={async (config) => {
+            try {
+              if (isGeneratingAnalysis) return;
+              setIsGeneratingAnalysis(true);
+              await applyAnalysisTable(analysisPanel.tablePos, config);
+              setAnalysisPanel(null);
+            } catch (err: any) {
+              alert(err?.message || '应用数据来源失败');
+            } finally {
+              setIsGeneratingAnalysis(false);
+            }
           }}
         />
       )}

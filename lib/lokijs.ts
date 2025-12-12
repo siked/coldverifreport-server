@@ -19,6 +19,59 @@ let loki: Loki | null = null;
 let taskDataCollection: Collection<TemperatureHumidityData> | null = null;
 let currentTaskId: string | null = null;
 
+// 统一将时间戳按东八区(+08:00)解释为 UTC 时刻后保存为 Date
+// 规则：
+// - Date 实例：原样返回（视为已是正确的时间点）
+// - number：视为 UTC 毫秒时间戳，原样构造 Date
+// - string：
+//   - 如果包含时区（Z 或 ±HH:mm），按其自带时区解析
+//   - 如果为“无时区字符串”（如 2025-01-02 12:34:56 / 2025-01-02T12:34:56.123），
+//     按 +08:00 的本地时刻解释后，换算成 UTC 并存储
+const TZ_OFFSET_MINUTES = 8 * 60; // +08:00
+
+function hasExplicitTZ(str: string): boolean {
+  // 结尾包含 Z/z 或者 "+HH:mm" / "-HH:mm" / "+HHmm" / "-HHmm"
+  return /([zZ]|[+-]\d{2}:?\d{2})$/.test(str);
+}
+
+function parseNaiveStringAsUTCFromPlus8(str: string): Date {
+  // 支持：
+  // YYYY-MM-DD HH:mm[:ss[.SSS]]
+  // YYYY/MM/DD HH:mm[:ss[.SSS]]
+  // YYYY-MM-DDTHH:mm[:ss[.SSS]]
+  const m = str.match(
+    /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T](\d{1,2})(?::(\d{1,2})(?::(\d{1,2})(?:\.(\d{1,3}))?)?)?)?$/
+  );
+  if (!m) {
+    // 非预期格式，退回原生解析（可能会按运行环境本地时区解析）
+    return new Date(str);
+  }
+  const [_, y, mon, d, h = '0', mi = '0', s = '0', ms = '0'] = m;
+  const year = parseInt(y, 10);
+  const month = parseInt(mon, 10) - 1; // 0-11
+  const day = parseInt(d, 10);
+  const hour = parseInt(h, 10);
+  const minute = parseInt(mi, 10);
+  const second = parseInt(s, 10);
+  const milli = parseInt(ms, 10);
+
+  // 将 +08:00 的“墙上时间”换算为 UTC 时间点
+  const utcMs = Date.UTC(year, month, day, hour, minute, second, milli) - TZ_OFFSET_MINUTES * 60 * 1000;
+  return new Date(utcMs);
+}
+
+function toDateAssumingPlus8(value: Date | string | number): Date {
+  if (value instanceof Date) return value;
+  if (typeof value === 'number') return new Date(value);
+  if (typeof value === 'string') {
+    const s = value.trim();
+    if (hasExplicitTZ(s)) return new Date(s);
+    return parseNaiveStringAsUTCFromPlus8(s);
+  }
+  // 兜底：直接 new Date
+  return new Date(value as any);
+}
+
 /**
  * 初始化 LokiJS 数据库
  */
@@ -67,14 +120,12 @@ export async function loadTaskDataToLoki(
   
   // 插入数据
   if (data.length > 0) {
-    // 确保时间戳格式统一：如果是字符串或数字，转换为 Date 对象；如果已经是 Date，保持不变
+    // 统一时间戳：
+    // - 含时区字符串或数值时间戳：按原意解析
+    // - 无时区字符串：按 +08:00 解释后换算为 UTC 存储
     const normalizedData = data.map(item => ({
       ...item,
-      timestamp: typeof item.timestamp === 'string' 
-        ? new Date(item.timestamp) 
-        : typeof item.timestamp === 'number'
-        ? new Date(item.timestamp)
-        : item.timestamp,
+      timestamp: toDateAssumingPlus8(item.timestamp),
     }));
     
     taskDataCollection.insert(normalizedData);
@@ -107,8 +158,8 @@ export function getAllTaskDataFromLoki(taskId: string): TemperatureHumidityData[
  */
 export function getTaskDataFromLoki(
   taskId: string,
-  startTime: Date,
-  endTime: Date,
+  startTime: Date | string | number,
+  endTime: Date | string | number,
   deviceIds?: string[]
 ): TemperatureHumidityData[] {
   if (!taskDataCollection || currentTaskId !== taskId) {
@@ -116,11 +167,21 @@ export function getTaskDataFromLoki(
     return [];
   }
   
-  const startTimeMs = startTime.getTime();
-  const endTimeMs = endTime.getTime();
+  // 这里不再做 +8 处理，直接按照原始时间解析
+  const startTimeMs = new Date(startTime as any).getTime();
+  const endTimeMs = new Date(endTime as any).getTime();
+  console.log(
+    '[LokiJS] 查询参数 ->\n',
+    `taskId=${taskId}\n`,
+    `start=${startTime}\n`,
+    `end=${endTime}\n`,
+    `deviceIds=${deviceIds && deviceIds.length ? deviceIds.join(',') : '全部'}\n`
+  );
   
   // 先按任务ID查询
   const allData = taskDataCollection.find({ taskId });
+  console.log(`[LokiJS] 原始结果数量: ${allData.length}`);
+  
   
   // 按时间范围筛选
   const filteredByTime = allData.filter((item) => {
@@ -132,12 +193,16 @@ export function getTaskDataFromLoki(
     } else {
       ts = item.timestamp.getTime();
     }
-    return ts >= startTimeMs && ts <= endTimeMs;
+    // 结束时间向后放宽 1 分钟，避免边界遗漏
+    return ts >= startTimeMs && ts <= endTimeMs + 60 * 1000;
   });
+  console.log(`[LokiJS] 时间范围筛选后数量: ${filteredByTime.length}`);
   
   // 再按设备ID筛选
   if (deviceIds && deviceIds.length > 0) {
-    return filteredByTime.filter(item => deviceIds.includes(item.deviceId));
+    const filteredByDevice = filteredByTime.filter(item => deviceIds.includes(item.deviceId));
+    console.log(`[LokiJS] 设备筛选后数量: ${filteredByDevice.length}`);
+    return filteredByDevice;
   }
   
   return filteredByTime.map(item => ({ ...item })) as TemperatureHumidityData[];
@@ -186,4 +251,3 @@ export function getLokiStats(): {
     deviceIds,
   };
 }
-

@@ -100,12 +100,12 @@ const CurveChartPanel = ({
     [applyDeviceDataUpdate]
   );
 
-  // 计算所有数据的时间范围
+  // 计算所有数据的时间范围（加上8小时偏移）
   const dataTimeRange = useMemo(() => {
     const allTimestamps = renderDeviceIds.flatMap((deviceId) => {
       const dataset = deviceDataMap[deviceId] || [];
       return dataset
-        .map((item) => new Date(item.timestamp).getTime())
+        .map((item) => new Date(item.timestamp).getTime() + 8 * 60 * 60 * 1000)
         .filter((ts) => Number.isFinite(ts));
     });
     if (allTimestamps.length === 0) {
@@ -302,7 +302,8 @@ const CurveChartPanel = ({
           deviceId,
           points: dataset
             .map((item) => ({
-              timestamp: new Date(item.timestamp).getTime(),
+              // 加上8小时偏移（UTC+8）
+              timestamp: new Date(item.timestamp).getTime() + 8 * 60 * 60 * 1000,
               temperature: item.temperature,
               humidity: item.humidity,
             }))
@@ -441,6 +442,7 @@ const CurveChartPanel = ({
         title: { text: '时间' },
         // 设置 softMin 和 softMax 来告诉 scrollbar 完整的数据范围
         // 这样 scrollbar 才能正确显示当前视图范围相对于总数据范围的比例
+        // dataTimeRange 已经包含了8小时偏移
         softMin: dataTimeRange.min > 0 ? dataTimeRange.min : undefined,
         softMax: dataTimeRange.max > 0 ? dataTimeRange.max : undefined,
         events: {

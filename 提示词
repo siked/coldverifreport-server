@@ -1,3 +1,22 @@
+
+--------------------------------
+企业用户
+年/30000元
+
+
+
+个人用户：
+月/680 元
+年/6000 元
+
+限制：
+每个任务 只能 生成 3 次 WORD 文档
+
+
+模版：
+自定义价格
+
+--------------------------------
 新添加 魔术笔 模式的实现。总结如下：
 1、创建魔术笔模式 Hook：创建了 useMagicPenMode.ts，实现了：
 2、在图表上方创建一个透明的 canvas 层，仅在魔术笔模式下显示，鼠标左键长按移动时在 canvas 上实时绘制路径，使用蓝色线条显示绘制轨迹，不影响图表本身
@@ -935,26 +954,190 @@ tiptap编辑器 表格 中 添加功能：
 温度极值差
 
 
-在 编辑器 表格 功能中 增加 单选菜单功能，菜单 （表格（原有功能）、数据表、分析表）
+在 编辑器 表格菜单中（删除表格 下方） 增加 数据来源 功能（独立封装代码）弹窗，下面是功能描述：
+1、在 数据来源 页面 可以 选择 测点设备分析表、终端与绑定点分析表，选择有搜索功能
+1、所有 查询数据前，对开始时间和结束时间加上 8 小时偏移量
+2、全局点击监听器会关闭弹窗，需要识别 DataSourceAnalysisPanel 为弹窗
+3、直接 替换所选 表格，不要 生成新的表格
+4、对 已绑定数据来源 数据来源 的 表格，边框 为黄色，不能 对表格 进行任何编辑，左击、右击、双击 表格 后 直接 进入 数据来源 编辑 
+5、数据来源 中的 标签值改变后，表格 会 自动 刷新
 
-数据表：
+测点设备分析表：
+输出表格 字段：测点编号（最高温度、最低温度、平均温度、温度变化范围） 更具 数据集字段 生成
 
-
-分析表：
+参数：
+数据选择：单选 温度、湿度 （默认 温度）
 选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
 选择开始时间： 选择标签（类型为 日期、时间）
 选择结束时间： 选择标签（类型为 日期、时间）
-数据集字段：最高温度	最低温度	平均温度	温度变化范围 （多选）
+数据集字段：测点编号（默认）    最高温度	最低温度	平均温度	温度变化范围 （多选）
 
-输出表格：
-字段：测点编号（最高温度、最低温度、平均温度、温度变化范围） 更具 数据集字段 生成
+表格实例：
+测点编号	最高温度	最低温度	平均温度	温度变化范围
+001	6.9	3.5	4.5	3.4
+002	7.0	4.9	5.5	2.1
+003	6.1	4.4	4.8	1.7
+004	6.5	4.7	5.3	1.8
+005	6.7	4.5	5.6	2.2
+006	5.3	3.8	4.4	1.5
+最高温度和最低温度 标签（可配置 字体颜色），如果有多个编号 都要标记颜色
 
 
+终端与绑定点分析表：
+更具 终端设备 时间为标准 对应 验证设备 时间数据，生成 表格
+按照 左右 时间顺序排版
+参数：
+数据选择：单选 温度、湿度 （默认 温度）
+选择终端设备标签：（类型为 布点区域，单选，标签值 不能为空）
+选择验证设备标签：（类型为 布点区域，单选，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
 
-
-最高温度和最低温度 标签（配置颜色），如果有多个编号 都要标记颜色
-
-
-
+表格实例：
 时间	终端设备	验证设备	时间	终端设备	验证设备
-2025-07-21 14:59	4.6	4.9	2025-07-21 15:04	4.5	3.6
+2025-11-27 17:30	5.2	4.8	2025-11-27 17:35	3.7	4.4
+2025-11-27 17:40	4.8	4.7	2025-11-27 17:45	3.9	4.5
+2025-11-27 17:50	4.3	4.5	2025-11-27 17:55	4.1	4.6
+2025-11-27 18:00	4.1	4.4	2025-11-27 18:05	4.3	4.7
+
+	
+
+在 编辑器 表格菜单 数据来源 中 增加 区间所用时间分析表：
+参考下面 python 参考代码，实现 区间所用时间分析表 功能
+参数：
+数据选择：单选 温度、湿度 （默认 温度）
+选择布点标签：（类型为 布点区域，支持多选，多个布点 用 | 分割，并且 将所选标签所有值去重，标签值 不能为空）
+选择开始时间： 选择标签（类型为 日期、时间）
+选择结束时间： 选择标签（类型为 日期、时间）
+上限：输入上限，默认 为空
+下限：输入下限，默认 为空
+
+
+表格实例：
+温度（℃）	所用时间（min）
+5.8-8.3	16
+6.2-8.3	14
+6.6-8.3	12
+7.1-8.3	10
+7.4-8.3	8
+7.7-8.3	6
+7.8-8.3	4
+7.9-8.3	2
+
+python 参考代码：
+    # 测点列表
+    r_data_listid = libx.GetData_map(data_map, text[1], TaskListId)
+    # 选择开始时间
+    time_c_a = datetime.datetime.strptime(r_data_time.split("|")[0], "%Y-%m-%d %H:%M").strftime("%Y-%m-%d %H:%M:00")
+    #选择结束时间
+    time_c_b = datetime.datetime.strptime(r_data_time.split("|")[1], "%Y-%m-%d %H:%M").strftime("%Y-%m-%d %H:%M:00")
+    # 上限
+    r_data_max = libx.GetData_map(data_map, text[3], TaskListId)
+    # 下限
+    r_data_min = libx.GetData_map(data_map, text[4], TaskListId)
+
+
+    sn_x = None
+    t_t_x = None
+    DISTINCT_results = get_sn_data(Task, r_data_listid)
+    if len(DISTINCT_results) == 0:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="没找到测点数据 !")
+        return False
+
+    // 是否配置最大值，如果 不为空，也要 查询 最大值
+    if r_data_max != None:
+        results_list = get_SingleData_All_SELECT_WHERE_ORDER(data_map.get("T_task_id"), r_data_listid, time_c_a, time_c_b, "*","t_t >="+str(r_data_max),"ORDER BY t_time ")
+
+        if results_list == None:
+            results_max = get_SingleData_All_SELECT(data_map.get("T_task_id"), r_data_listid, time_c_a, time_c_b, "max(t_t)")
+            results_list = get_SingleData_All_SELECT_WHERE_ORDER(data_map.get("T_task_id"), r_data_listid, time_c_a, time_c_b, "*", "t_t >=" + str(results_max[0]), "ORDER BY t_time ")
+            t_t_x = results_max[0]
+
+        time_di = results_list[0][5]
+        t_t_x = results_list[0][3]
+        sn_x = results_list[0][1]
+
+    // 是否配置最小值，如果 不为空，也要 查询 最小值
+    elif r_data_min != None:
+        results_list = get_SingleData_All_SELECT_WHERE_ORDER(data_map.get("T_task_id"), r_data_listid, time_c_a, time_c_b, "*","t_t <="+str(r_data_max),"ORDER BY t_time ")
+
+        if results_list == None:
+            results_max = get_SingleData_All_SELECT(data_map.get("T_task_id"), r_data_listid, time_c_a, time_c_b, "min(t_t)")
+            results_list = get_SingleData_All_SELECT_WHERE_ORDER(data_map.get("T_task_id"), r_data_listid, time_c_a, time_c_b,
+                                                                 "*", "t_t <=" + str(results_max[0]), "ORDER BY t_time ")
+            t_t_x = results_max[0]
+
+        sn_x = results_list[0][1]
+        t_t_x = results_list[0][3]
+        time_di = results_list[0][5]
+
+    """业务数据来源"""
+    if time_di == None:
+        TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="没找到 超标时间 !")
+        return False
+
+    results = get_SingleData(Task, sn_x, time_c_a, time_di.strftime("%Y-%m-%d %H:%M:00"))
+
+    if sn_x == None:
+        # TaskList_Up(TaskListId, Code=602, Msg="生成失败！", Item="没有超标探头!")
+        # 删除
+        for row in table.rows:
+            row._element.getparent().remove(row._element)
+        row = table.add_row().cells
+        cell = row[0]
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER  # 垂直居中
+        cell.paragraphs[0].paragraph_format.alignment = WD_TABLE_ALIGNMENT.CENTER  # 水平居中
+        xx = cell.paragraphs[0].add_run("!!!")
+        xx.font.name = font_name
+        xx.font.size = Pt(font_size)
+        xx.font.bold = font_bold
+        return True
+
+    # 删除
+    for row in table.rows:
+        row._element.getparent().remove(row._element)
+
+    row = table.add_row().cells
+    # ------ 插入表头   温度（℃）	所用时间（min）
+    tou_list = ["温度（℃）", "所用时间（min）"]
+    for x in range(tou_list.__len__()):
+        cell = row[x]
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER  # 垂直居中
+        cell.paragraphs[0].paragraph_format.alignment = WD_TABLE_ALIGNMENT.CENTER  # 水平居中
+        xx = cell.paragraphs[0].add_run(str(tou_list[x]))
+        xx.font.name = font_name
+        xx.font.size = Pt(font_size)
+        xx.font.bold = font_bold
+
+    bu = math.floor(len(results) / 7)
+    if bu < 2:
+        bu = 2
+    y = 0
+    # 插入表格 数据
+    while True:
+
+        row = table.add_row().cells
+
+        # 插入时间
+        cell = row[0]
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER  # 垂直居中
+        cell.paragraphs[0].paragraph_format.alignment = WD_TABLE_ALIGNMENT.CENTER  # 水平居中
+        xx = cell.paragraphs[0].add_run(str(results[y][3]) + "-" + str(t_t_x))
+        xx.font.name = font_name
+        xx.font.size = Pt(font_size)
+        xx.font.bold = font_bold
+
+        # 插入a
+        cell = row[1]
+        cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER  # 垂直居中
+        cell.paragraphs[0].paragraph_format.alignment = WD_TABLE_ALIGNMENT.CENTER  # 水平居中
+        xx = cell.paragraphs[0].add_run(str((len(results) - 1) - y))
+        xx.font.name = font_name
+        xx.font.size = Pt(font_size)
+        xx.font.bold = font_bold
+
+        # 跳出
+        y += bu
+        if y >= len(results) - 1:
+            break;
+

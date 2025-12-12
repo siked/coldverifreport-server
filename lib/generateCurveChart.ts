@@ -3,7 +3,7 @@
  * 从 LokiJS 读取数据并在客户端生成曲线图
  */
 
-import { getAllTaskDataFromLoki, getCurrentTaskId } from './lokijs';
+import { getTaskDataFromLoki, getCurrentTaskId } from './lokijs';
 import type { CurveChartConfig, CurveLine, PhaseNote } from '@/components/tiptap/CurveChartConfigPanel';
 import type { TemplateTag } from '@/components/TemplateTagList';
 
@@ -157,12 +157,12 @@ export async function generateCurveChart(
   let startTime = parseDateTime(startTimeTag.value);
   let endTime = parseDateTime(endTimeTag.value);
 
-  console.log('[曲线图生成] 时间解析:', {
-    startTimeTagValue: startTimeTag.value,
-    startTimeParsed: startTime ? startTime.toISOString() : '解析失败',
-    endTimeTagValue: endTimeTag.value,
-    endTimeParsed: endTime ? endTime.toISOString() : '解析失败',
-  });
+  // console.log('[曲线图生成] 时间解析:', {
+  //   startTimeTagValue: startTimeTag.value,
+  //   startTimeParsed: startTime ? startTime.toISOString() : '解析失败',
+  //   endTimeTagValue: endTimeTag.value,
+  //   endTimeParsed: endTime ? endTime.toISOString() : '解析失败',
+  // });
 
   if (!startTime || !endTime) {
     throw new Error(`开始时间或结束时间格式不正确。开始时间: "${startTimeTag.value}", 结束时间: "${endTimeTag.value}"`);
@@ -176,38 +176,31 @@ export async function generateCurveChart(
     const endOffsetMs = endOffsetMinutes * 60 * 1000;
     startTime = new Date(startTime.getTime() - startOffsetMs);
     endTime = new Date(endTime.getTime() + endOffsetMs);
-    console.log('[曲线图生成] 应用偏移时间:', {
-      startOffsetMinutes,
-      endOffsetMinutes,
-      startTimeBefore: parseDateTime(startTimeTag.value)?.toISOString(),
-      startTimeAfter: startTime.toISOString(),
-      endTimeBefore: parseDateTime(endTimeTag.value)?.toISOString(),
-      endTimeAfter: endTime.toISOString(),
-    });
   }
 
   // 结束时间强制加1分钟（不包含偏移）
-  endTime = new Date(endTime.getTime() + 60 * 1000);
-  console.log('[曲线图生成] 结束时间强制加1分钟:', {
-    endTimeBefore: parseDateTime(endTimeTag.value)?.toISOString(),
-    endTimeAfter: endTime.toISOString(),
-  });
+  // endTime = new Date(endTime.getTime() + 60 * 1000);
+  // console.log('[曲线图生成] 结束时间强制加1分钟:', {
+  //   endTimeBefore: parseDateTime(endTimeTag.value)?.toISOString(),
+  //   endTimeAfter: endTime.toISOString(),
+  // });
 
   if (startTime >= endTime) {
-    throw new Error(`开始时间必须早于结束时间。开始时间: ${startTime.toISOString()}, 结束时间: ${endTime.toISOString()}`);
+    throw new Error(`开始时间必须早于结束时间。开始时间: ${startTime}, 结束时间: ${endTime}`);
   }
 
-  // 从 LokiJS 获取所有数据
-  const currentLokiTaskId = getCurrentTaskId();
-  if (currentLokiTaskId !== taskId) {
-    console.error('[曲线图生成] 错误: 任务数据未加载到内存', {
-      requestedTaskId: taskId,
-      currentTaskId: currentLokiTaskId,
-    });
-    throw new Error('任务数据未加载到内存，请先关联任务');
-  }
+  // // 从 LokiJS 获取所有数据
+  // const currentLokiTaskId = getCurrentTaskId();
+  // if (currentLokiTaskId !== taskId) {
+  //   console.error('[曲线图生成] 错误: 任务数据未加载到内存', {
+  //     requestedTaskId: taskId,
+  //     currentTaskId: currentLokiTaskId,
+  //   });
+  //   throw new Error('任务数据未加载到内存，请先关联任务');
+  // }
   
-  const allData = getAllTaskDataFromLoki(taskId);
+  // 数据查询统一通过 getTaskDataFromLoki 获取（含时间范围）
+  const allData = getTaskDataFromLoki(taskId, startTime, endTime);
 
   // 显示数据中的时间戳格式示例
   const sampleTimestamps = allData.slice(0, 3).map(item => {
@@ -257,118 +250,7 @@ export async function generateCurveChart(
     throw new Error('内存中没有数据，请先关联任务');
   }
 
-  // 筛选时间范围内的数据
-  // 统一时间格式：将时间戳转换为毫秒数，并确保比较时使用相同的时间单位
-  // 注意：数据存储的时间戳是 UTC 时间，查询时需要加上 8 小时时区偏移（UTC+8）
-  const filteredData = allData.filter((item) => {
-    // 处理时间戳可能是字符串、Date 对象或数字（毫秒时间戳）的情况
-    let itemTime: number;
-    
-    if (typeof item.timestamp === 'number') {
-      // 数字类型：直接使用（假设是毫秒时间戳）
-      itemTime = item.timestamp;
-    } else if (typeof item.timestamp === 'string') {
-      // 字符串类型：转换为 Date 对象再获取毫秒数
-      const date = new Date(item.timestamp);
-      if (isNaN(date.getTime())) {
-        console.warn('[曲线图生成] 无效的时间戳字符串:', item.timestamp);
-        return false;
-      }
-      itemTime = date.getTime();
-    } else if (item.timestamp instanceof Date) {
-      // Date 对象：直接获取毫秒数
-      itemTime = item.timestamp.getTime();
-    } else {
-      console.warn('[曲线图生成] 无效的时间戳格式:', item.timestamp, typeof item.timestamp);
-      return false;
-    }
-    
-    // 检查时间戳是否有效（应该是合理的毫秒时间戳）
-    if (isNaN(itemTime) || itemTime <= 0 || itemTime > Date.now() + 365 * 24 * 60 * 60 * 1000) {
-      console.warn('[曲线图生成] 无效的时间戳值:', item.timestamp, '->', itemTime);
-      return false;
-    }
-    
-    // 数据存储的时间戳是 UTC+8 时间，查询时间也已经转换为 UTC 时间
-    // 所以需要将数据时间戳减去 8 小时来匹配 UTC 查询时间
-    const itemTimeUTC = itemTime - TIMEZONE_OFFSET_MS;
-    
-    // 使用时间戳（毫秒）进行比较
-    const startTimeMs = startTime.getTime();
-    const endTimeMs = endTime.getTime();
-    
-    return itemTimeUTC >= startTimeMs && itemTimeUTC <= endTimeMs;
-  });
-
-  console.log('[曲线图生成] 时间范围筛选后:', {
-    taskId: taskId,
-    startTime: startTime.toISOString(),
-    endTime: endTime.toISOString(),
-    filteredCount: filteredData.length,
-    filteredDeviceIds: Array.from(new Set(filteredData.map(item => item.deviceId))),
-    dataTimeRange: filteredData.length > 0 ? {
-      earliest: (() => {
-        const times = filteredData.map(item => {
-          if (typeof item.timestamp === 'number') {
-            return item.timestamp;
-          } else if (typeof item.timestamp === 'string') {
-            return new Date(item.timestamp).getTime();
-          } else {
-            return item.timestamp.getTime();
-          }
-        });
-        return new Date(Math.min(...times)).toISOString();
-      })(),
-      latest: (() => {
-        const times = filteredData.map(item => {
-          if (typeof item.timestamp === 'number') {
-            return item.timestamp;
-          } else if (typeof item.timestamp === 'string') {
-            return new Date(item.timestamp).getTime();
-          } else {
-            return item.timestamp.getTime();
-          }
-        });
-        return new Date(Math.max(...times)).toISOString();
-      })(),
-    } : null,
-  });
-
-  if (filteredData.length === 0) {
-    console.error('[曲线图生成] 错误: 指定时间范围内没有数据', {
-      taskId: taskId,
-      startTime: startTime.toISOString(),
-      endTime: endTime.toISOString(),
-      queryTimeRange: `${startTime.toISOString()} 到 ${endTime.toISOString()}`,
-      totalDataCount: allData.length,
-      allDeviceIds: Array.from(new Set(allData.map(item => item.deviceId))),
-      dataTimeRange: allData.length > 0 ? {
-        earliest: (() => {
-          const times = allData.map(item => {
-            if (typeof item.timestamp === 'number') {
-              return item.timestamp;
-            } else if (typeof item.timestamp === 'string') {
-              return new Date(item.timestamp).getTime();
-            } else {
-              return item.timestamp.getTime();
-            }
-          });
-          return new Date(Math.min(...times)).toISOString();
-        })(),
-        latest: (() => {
-          const times = allData.map(item => {
-            if (typeof item.timestamp === 'number') {
-              return item.timestamp;
-            } else if (typeof item.timestamp === 'string') {
-              return new Date(item.timestamp).getTime();
-            } else {
-              return item.timestamp.getTime();
-            }
-          });
-          return new Date(Math.max(...times)).toISOString();
-        })(),
-      } : null,
-    });
+  if (allData.length === 0) {
     throw new Error('指定时间范围内没有数据');
   }
 
@@ -440,7 +322,7 @@ export async function generateCurveChart(
       // 去重
       const uniqueCurves = Array.from(new Set(individualCurves));
 
-      const sortedData = [...filteredData].sort(
+      const sortedData = [...allData].sort(
         (a, b) => getTimestampMs(a.timestamp) - getTimestampMs(b.timestamp)
       );
 
@@ -513,8 +395,8 @@ export async function generateCurveChart(
           console.warn('[曲线图生成] 警告: 曲线没有生成数据', {
             lineType: 'curve',
             curveValue: curveValue,
-            filteredDataCount: filteredData.length,
-            matchedDeviceDataCount: filteredData.filter(item => item.deviceId === curveValue).length,
+            filteredDataCount: allData.length,
+            matchedDeviceDataCount: allData.filter(item => item.deviceId === curveValue).length,
           });
         }
       }
@@ -548,7 +430,7 @@ export async function generateCurveChart(
       // 去重，获取所有需要参与计算的布点
       const uniqueDeviceIds = Array.from(new Set(allDeviceIds));
 
-      const sortedData = [...filteredData].sort(
+      const sortedData = [...allData].sort(
         (a, b) => getTimestampMs(a.timestamp) - getTimestampMs(b.timestamp)
       );
 
@@ -620,8 +502,8 @@ export async function generateCurveChart(
         console.warn('[曲线图生成] 警告: 平均值曲线没有生成数据', {
           lineType: 'average',
           deviceIds: uniqueDeviceIds,
-          filteredDataCount: filteredData.length,
-          matchedDeviceDataCount: filteredData.filter(item => uniqueDeviceIds.includes(item.deviceId)).length,
+          filteredDataCount: allData.length,
+          matchedDeviceDataCount: allData.filter(item => uniqueDeviceIds.includes(item.deviceId)).length,
         });
       }
     } else if (line.type === 'line') {
@@ -636,7 +518,7 @@ export async function generateCurveChart(
       
       const fixedValue = line.lineValue;
 
-      const sortedData = [...filteredData].sort(
+      const sortedData = [...allData].sort(
         (a, b) => getTimestampMs(a.timestamp) - getTimestampMs(b.timestamp)
       );
       // 获取唯一的时间戳（使用原始时间戳，不经过时区转换）
@@ -921,7 +803,7 @@ export async function generateCurveChart(
       : new Date(chartData.labels[index]).getTime();
     const x = padding.left + ((time - minTime) / timeRange) * chartWidth;
     // 数据存储的时间戳是UTC+8，显示时需要减去8小时偏移
-    const date = new Date(time - TIMEZONE_OFFSET_MS);
+    const date = new Date(time);
     
     // 绘制虚线刻度线
     ctx.beginPath();
@@ -1128,11 +1010,11 @@ export async function generateCurveChart(
           let regionEndTime = parseDateTime(endTimeTag.value);
           
           if (regionStartTime && regionEndTime) {
-            let regionStartTimeMs = regionStartTime.getTime() + TIMEZONE_OFFSET_MS;
-            let regionEndTimeMs = regionEndTime.getTime() + TIMEZONE_OFFSET_MS;
+            let regionStartTimeMs = regionStartTime.getTime();
+            let regionEndTimeMs = regionEndTime.getTime() ;
             
-            const chartStartTimeMs = startTime.getTime() + TIMEZONE_OFFSET_MS;
-            const chartEndTimeMs = endTime.getTime() + TIMEZONE_OFFSET_MS;
+            const chartStartTimeMs = startTime.getTime() ;
+            const chartEndTimeMs = endTime.getTime() ;
             
             if (regionStartTimeMs < chartStartTimeMs) {
               regionStartTimeMs = chartStartTimeMs;

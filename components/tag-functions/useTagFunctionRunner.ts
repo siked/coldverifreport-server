@@ -209,9 +209,9 @@ export function useTagFunctionRunner({ tag, allTags, taskId, onApply }: TagFunct
 
         // 根据 generateCurveChart.ts 的逻辑，数据存储的时间戳是 UTC+8（本地时间）
         // 查询时传入的也是本地时间，但需要加上 8 小时才能匹配数据库中的时间戳
-        const TIMEZONE_OFFSET_MS = 8 * 60 * 60 * 1000; // 8小时 = 28800000 毫秒
-        const startQuery = new Date(windowStart.getTime() + TIMEZONE_OFFSET_MS);
-        const endQuery = new Date(windowEnd.getTime() + TIMEZONE_OFFSET_MS);
+
+        const startQuery = new Date(windowStart.getTime());
+        const endQuery = new Date(windowEnd.getTime() );
 
         // 查询该时间点该设备的数据
         const data = getTaskDataFromLoki(taskId, startQuery, endQuery, [deviceId]);
@@ -371,9 +371,9 @@ export function useTagFunctionRunner({ tag, allTags, taskId, onApply }: TagFunct
       // 根据 generateCurveChart.ts 的逻辑，数据存储的时间戳是 UTC+8（本地时间）
       // 查询时传入的也是本地时间，但需要加上 8 小时才能匹配数据库中的时间戳
       // 这是因为数据库中的时间戳实际上是本地时间，但被当作 UTC 时间存储了
-      const TIMEZONE_OFFSET_MS = 8 * 60 * 60 * 1000; // 8小时 = 28800000 毫秒
-      const startQuery = new Date(start.getTime() + TIMEZONE_OFFSET_MS);
-      const endQuery = new Date(end.getTime() + TIMEZONE_OFFSET_MS);
+ 
+      const startQuery = new Date(start.getTime() );
+      const endQuery = new Date(end.getTime() );
       
       const data = getTaskDataFromLoki(taskId!, startQuery, endQuery, locations);
       const queryInfo = [
@@ -387,7 +387,6 @@ export function useTagFunctionRunner({ tag, allTags, taskId, onApply }: TagFunct
         `查询 end(ms): ${endQuery.getTime()} (+8小时)`,
         `查询 start ISO: ${startQuery.toISOString()}`,
         `查询 end ISO: ${endQuery.toISOString()}`,
-        `时区偏移(ms): +${TIMEZONE_OFFSET_MS} (UTC+8)`,
         `命中: ${data.length} 条`,
       ].join('\n');
       if (!data.length) {
