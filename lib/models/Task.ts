@@ -1,5 +1,6 @@
 import clientPromise from '../mongodb';
 import { toObjectId } from '../utils';
+import { TemplateTag } from './Template';
 
 export interface Task {
   _id?: string;
@@ -8,6 +9,7 @@ export interface Task {
   categoryId: string; // 分类 id
   taskTypeId: string; // 任务类型 id
   userId: string;
+  tags?: TemplateTag[]; // 任务标签列表
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -17,7 +19,8 @@ export async function createTask(
   taskName: string,
   categoryId: string,
   taskTypeId: string,
-  userId: string
+  userId: string,
+  tags?: TemplateTag[]
 ): Promise<Task> {
   const client = await clientPromise;
   const db = client.db();
@@ -29,6 +32,7 @@ export async function createTask(
     categoryId,
     taskTypeId,
     userId,
+    tags,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -57,22 +61,29 @@ export async function updateTask(
   taskName: string,
   categoryId: string,
   taskTypeId: string,
-  userId: string
+  userId: string,
+  tags?: TemplateTag[]
 ): Promise<boolean> {
   const client = await clientPromise;
   const db = client.db();
   const tasks = db.collection<Task>('tasks');
 
+  const updateData: any = {
+    taskNumber,
+    taskName,
+    categoryId,
+    taskTypeId,
+    updatedAt: new Date(),
+  };
+
+  if (tags !== undefined) {
+    updateData.tags = tags;
+  }
+
   const result = await tasks.updateOne(
     { _id: toObjectId(id), userId },
     {
-      $set: {
-        taskNumber,
-        taskName,
-        categoryId,
-        taskTypeId,
-        updatedAt: new Date(),
-      },
+      $set: updateData,
     }
   );
 

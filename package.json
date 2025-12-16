@@ -9,6 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@handsontable/react": "^16.2.0",
     "@popperjs/core": "^2.11.8",
     "@tiptap/extension-code-block-lowlight": "^2.27.1",
     "@tiptap/extension-color": "^2.27.1",
@@ -30,12 +31,15 @@
     "@types/lokijs": "^1.5.14",
     "@types/lz-string": "^1.3.34",
     "@types/uuid": "^10.0.0",
+    "ag-grid-community": "^35.0.0",
+    "ag-grid-react": "^35.0.0",
     "bcryptjs": "^2.4.3",
     "browser-image-compression": "^2.0.2",
     "canvas": "^3.2.0",
     "date-fns": "^3.0.6",
     "dayjs": "^1.11.19",
     "docx": "^9.5.1",
+    "handsontable": "^16.2.0",
     "highcharts": "^12.4.0",
     "highcharts-react-official": "^3.2.3",
     "highlight.js": "^11.11.1",

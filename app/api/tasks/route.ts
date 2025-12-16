@@ -6,6 +6,7 @@ import {
   updateTask,
   deleteTask,
 } from '@/lib/models/Task';
+import { getTemplateById } from '@/lib/models/Template';
 
 export async function GET() {
   try {
@@ -37,7 +38,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '所有字段不能为空' }, { status: 400 });
     }
 
-    const task = await createTask(taskNumber, taskName, categoryId, taskTypeId, user.userId);
+    // 获取模板并同步 tags
+    let tags = undefined;
+    if (taskTypeId) {
+      const template = await getTemplateById(taskTypeId, user.userId);
+      if (template && template.tags) {
+        // 深拷贝模板的 tags 到任务
+        tags = JSON.parse(JSON.stringify(template.tags));
+      }
+    }
+
+    const task = await createTask(taskNumber, taskName, categoryId, taskTypeId, user.userId, tags);
     return NextResponse.json({ task });
   } catch (error: any) {
     return NextResponse.json(
@@ -54,13 +65,13 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: '未登录' }, { status: 401 });
     }
 
-    const { id, taskNumber, taskName, categoryId, taskTypeId } = await request.json();
+    const { id, taskNumber, taskName, categoryId, taskTypeId, tags } = await request.json();
 
     if (!id || !taskNumber || !taskName || !categoryId || !taskTypeId) {
       return NextResponse.json({ error: '所有字段不能为空' }, { status: 400 });
     }
 
-    const success = await updateTask(id, taskNumber, taskName, categoryId, taskTypeId, user.userId);
+    const success = await updateTask(id, taskNumber, taskName, categoryId, taskTypeId, user.userId, tags);
     if (!success) {
       return NextResponse.json({ error: '更新失败' }, { status: 400 });
     }

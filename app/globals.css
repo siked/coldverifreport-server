@@ -166,21 +166,7 @@ body {
   bottom: -2px;
   width: 4px;
   background-color: #3b82f6;
-  cursor: col-resize;
-  pointer-events: auto;
-}
-
-.ProseMirror table .column-resize-handle::after {
-  content: '';
-  position: absolute;
-  inset: -4px;
-  cursor: col-resize;
-}
-
-.ProseMirror.resize-cursor,
-.ProseMirror table .column-resize-handle,
-.ProseMirror table .column-resize-handle::after {
-  cursor: col-resize !important;
+  pointer-events: none;
 }
 
 .ProseMirror table p {
