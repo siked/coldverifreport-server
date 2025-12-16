@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '未登录' }, { status: 401 });
     }
 
-    const { taskNumber, taskName, categoryId, taskTypeId } = await request.json();
+    const { taskNumber, taskName, categoryId, taskTypeId, reportContent } = await request.json();
 
     if (!taskNumber || !taskName || !categoryId || !taskTypeId) {
       return NextResponse.json({ error: '所有字段不能为空' }, { status: 400 });
@@ -48,7 +48,15 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const task = await createTask(taskNumber, taskName, categoryId, taskTypeId, user.userId, tags);
+    const task = await createTask(
+      taskNumber,
+      taskName,
+      categoryId,
+      taskTypeId,
+      user.userId,
+      tags,
+      reportContent
+    );
     return NextResponse.json({ task });
   } catch (error: any) {
     return NextResponse.json(
@@ -65,13 +73,23 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: '未登录' }, { status: 401 });
     }
 
-    const { id, taskNumber, taskName, categoryId, taskTypeId, tags } = await request.json();
+    const { id, taskNumber, taskName, categoryId, taskTypeId, tags, reportContent } =
+      await request.json();
 
     if (!id || !taskNumber || !taskName || !categoryId || !taskTypeId) {
       return NextResponse.json({ error: '所有字段不能为空' }, { status: 400 });
     }
 
-    const success = await updateTask(id, taskNumber, taskName, categoryId, taskTypeId, user.userId, tags);
+    const success = await updateTask(
+      id,
+      taskNumber,
+      taskName,
+      categoryId,
+      taskTypeId,
+      user.userId,
+      tags,
+      reportContent
+    );
     if (!success) {
       return NextResponse.json({ error: '更新失败' }, { status: 400 });
     }

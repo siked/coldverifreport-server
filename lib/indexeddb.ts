@@ -90,6 +90,69 @@ export function openDB(version?: number): Promise<IDBDatabase> {
 }
 
 /**
+ * 确保元数据 ObjectStore 存在（用于兼容旧版本数据库）
+ */
+async function ensureMetaStore(): Promise<IDBDatabase> {
+  // 先尝试直接打开，若已存在则直接返回
+  const db = await openDB();
+  if (db.objectStoreNames.contains(META_STORE_NAME)) {
+    return db;
+  }
+
+  // 需要通过升级版本来创建 META_STORE_NAME
+  return new Promise((resolve, reject) => {
+    try {
+      if (dbInstance?.db) {
+        dbInstance.db.close();
+        dbInstance = null;
+      }
+
+      const versionRequest = indexedDB.open(DB_NAME);
+
+      versionRequest.onerror = () => {
+        reject(new Error('获取数据库版本失败（元数据初始化）'));
+      };
+
+      versionRequest.onsuccess = () => {
+        const tempDb = versionRequest.result;
+        const currentVersion = tempDb.version;
+        tempDb.close();
+
+        const newVersion = currentVersion + 1;
+        const upgradeRequest = indexedDB.open(DB_NAME, newVersion);
+
+        upgradeRequest.onerror = () => {
+          reject(new Error('升级数据库失败（元数据初始化）'));
+        };
+
+        upgradeRequest.onupgradeneeded = (event) => {
+          const upgradeDb = (event.target as IDBOpenDBRequest).result;
+          // 创建元数据存储对象
+          if (!upgradeDb.objectStoreNames.contains(META_STORE_NAME)) {
+            upgradeDb.createObjectStore(META_STORE_NAME, { keyPath: 'taskId' });
+          }
+        };
+
+        upgradeRequest.onsuccess = () => {
+          const newDb = upgradeRequest.result;
+
+          // 记录所有已存在的 objectStore
+          knownStores = new Set<string>();
+          for (let i = 0; i < newDb.objectStoreNames.length; i++) {
+            knownStores.add(newDb.objectStoreNames[i]);
+          }
+
+          dbInstance = { db: newDb, version: newDb.version };
+          resolve(newDb);
+        };
+      };
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+/**
  * 确保任务的 objectStore 存在，如果不存在则创建
  */
 export async function ensureTaskStore(taskId: string): Promise<IDBDatabase> {
@@ -373,7 +436,7 @@ export function deleteTaskData(taskId: string): Promise<void> {
 export function saveMetaToIndexedDB(taskId: string, meta: Record<string, any>): Promise<void> {
   return new Promise(async (resolve, reject) => {
     try {
-      const db = await openDB();
+      const db = await ensureMetaStore();
       const transaction = db.transaction([META_STORE_NAME], 'readwrite');
       const store = transaction.objectStore(META_STORE_NAME);
 
@@ -404,7 +467,7 @@ export function saveMetaToIndexedDB(taskId: string, meta: Record<string, any>): 
 export function loadMetaFromIndexedDB(taskId: string): Promise<Record<string, any> | null> {
   return new Promise(async (resolve, reject) => {
     try {
-      const db = await openDB();
+      const db = await ensureMetaStore();
       const transaction = db.transaction([META_STORE_NAME], 'readonly');
       const store = transaction.objectStore(META_STORE_NAME);
 
@@ -430,7 +493,7 @@ export function loadMetaFromIndexedDB(taskId: string): Promise<Record<string, an
 export function deleteMetaFromIndexedDB(taskId: string): Promise<void> {
   return new Promise(async (resolve, reject) => {
     try {
-      const db = await openDB();
+      const db = await ensureMetaStore();
       const transaction = db.transaction([META_STORE_NAME], 'readwrite');
       const store = transaction.objectStore(META_STORE_NAME);
 

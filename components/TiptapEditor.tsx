@@ -2211,13 +2211,23 @@ const computeCurveChartInputSignature = (
         });
         
         if (!found) {
-          console.error('applyDataSourceToImage: Image node not found at pos', pos, 'oldSrc:', oldSrc);
+          console.warn(
+            'applyDataSourceToImage: Image node not found, skip applying data source',
+            {
+              pos,
+              oldSrc,
+              payloadType: payload.type,
+            }
+          );
           return;
         }
       }
       
       if (!node || node.type.name !== 'image') {
-        console.error('applyDataSourceToImage: Image node not found at pos', pos);
+        console.warn('applyDataSourceToImage: Image node not found at final pos, skip', {
+          pos,
+          payloadType: payload.type,
+        });
         return;
       }
       

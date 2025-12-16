@@ -10,6 +10,7 @@ export interface Task {
   taskTypeId: string; // 任务类型 id
   userId: string;
   tags?: TemplateTag[]; // 任务标签列表
+  reportContent?: string; // 生成报告模式下的文档内容
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -20,7 +21,8 @@ export async function createTask(
   categoryId: string,
   taskTypeId: string,
   userId: string,
-  tags?: TemplateTag[]
+  tags?: TemplateTag[],
+  reportContent?: string
 ): Promise<Task> {
   const client = await clientPromise;
   const db = client.db();
@@ -33,6 +35,7 @@ export async function createTask(
     taskTypeId,
     userId,
     tags,
+    reportContent,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -62,7 +65,8 @@ export async function updateTask(
   categoryId: string,
   taskTypeId: string,
   userId: string,
-  tags?: TemplateTag[]
+  tags?: TemplateTag[],
+  reportContent?: string
 ): Promise<boolean> {
   const client = await clientPromise;
   const db = client.db();
@@ -78,6 +82,10 @@ export async function updateTask(
 
   if (tags !== undefined) {
     updateData.tags = tags;
+  }
+
+  if (reportContent !== undefined) {
+    updateData.reportContent = reportContent;
   }
 
   const result = await tasks.updateOne(

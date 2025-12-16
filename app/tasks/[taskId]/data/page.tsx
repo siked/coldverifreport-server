@@ -14,7 +14,7 @@ import Layout from '@/components/Layout';
 import Alert from '@/components/Alert';
 import CurveChartPanel from './components/CurveChartPanel';
 import TrendGenerator from './components/TrendGenerator';
-import { ArrowLeft, Plus, Trash2, Edit2, Upload, Save, Trash, Database, Loader2 } from 'lucide-react';
+import { ArrowLeft, Plus, Trash2, Edit2, Upload, Save, Trash, Database, Loader2, FileText } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useTaskDataLayer } from './hooks/useTaskDataLayer';
 import {
@@ -1476,23 +1476,34 @@ export default function TaskDataPage() {
           return map;
         }, new Map());
 
+        const totalRowsToWrite = dataWithTaskId.length;
+        const deviceCountToWrite = grouped.size;
+
+        const yieldToUI = async () => {
+          await new Promise((resolve) => {
+            if (typeof requestAnimationFrame === 'function') {
+              requestAnimationFrame(() => resolve(null));
+            } else {
+              setTimeout(() => resolve(null), 0);
+            }
+          });
+        };
+
+        logImportStep('write per device start', {
+          deviceCount: deviceCountToWrite,
+          totalRows: totalRowsToWrite,
+        });
+
         setImportProgress({
           stage: '写入缓存…',
           processed: 0,
-          total: grouped.size,
+          total: totalRowsToWrite,
         });
-
-        const yieldToUI = async () => {
-          await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
-        };
         await yieldToUI();
 
-        logImportStep('write per device start', {
-          deviceCount: grouped.size,
-          totalRows: dataWithTaskId.length,
-        });
-
         let processedDevices = 0;
+        let processedRows = 0;
+
         for (const [deviceId, deviceRows] of grouped.entries()) {
           const t0 = performance.now();
           logImportStep('write device start', {
@@ -1500,30 +1511,54 @@ export default function TaskDataPage() {
             newRows: deviceRows.length,
           });
 
-          // 读取已缓存数据并合并
-          const existingData = (await loadFromCache(taskId, deviceId)) || [];
-          const merged = [...existingData, ...deviceRows].sort(
-            (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
-          );
+          try {
+            // 读取已缓存数据并合并
+            const existingData = (await loadFromCache(taskId, deviceId)) || [];
+            const merged = [...existingData, ...deviceRows].sort(
+              (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+            );
 
-          await saveToCache(taskId, deviceId, merged);
+            await saveToCache(taskId, deviceId, merged, true);
 
-          const t1 = performance.now();
-          processedDevices += 1;
-          setImportProgress({
-            stage: '写入缓存…',
-            processed: processedDevices,
-            total: grouped.size,
-          });
-          logImportStep('write device done', {
-            deviceId,
-            newRows: deviceRows.length,
-            existingRows: existingData.length,
-            mergedRows: merged.length,
-            processedDevices,
-            totalDevices: grouped.size,
-            durationMs: Math.round(t1 - t0),
-          });
+            const t1 = performance.now();
+            processedDevices += 1;
+            processedRows += deviceRows.length;
+
+            setImportProgress({
+              stage: '写入缓存…',
+              processed: processedRows,
+              total: totalRowsToWrite,
+            });
+            logImportStep('write device done', {
+              deviceId,
+              newRows: deviceRows.length,
+              existingRows: existingData.length,
+              mergedRows: merged.length,
+              processedDevices,
+              totalDevices: deviceCountToWrite,
+              processedRows,
+              totalRows: totalRowsToWrite,
+              durationMs: Math.round(t1 - t0),
+            });
+          } catch (error) {
+            processedDevices += 1;
+            processedRows += deviceRows.length;
+            logImportStep('write device error', {
+              deviceId,
+              error,
+            });
+            setAlert({
+              isOpen: true,
+              message: `设备 ${deviceId} 写入缓存失败：${(error as any)?.message || '未知错误'}`,
+              type: 'warning',
+            });
+            setImportProgress({
+              stage: '写入缓存…',
+              processed: processedRows,
+              total: totalRowsToWrite,
+            });
+          }
+
           await yieldToUI();
         }
 
@@ -1531,8 +1566,8 @@ export default function TaskDataPage() {
 
         setImportProgress({
           stage: '刷新界面…',
-          processed: grouped.size,
-          total: grouped.size,
+          processed: totalRowsToWrite,
+          total: totalRowsToWrite,
         });
         await updateCacheStats();
 
@@ -2323,6 +2358,13 @@ const collectSelectionData = useCallback(
               </div>
             </div>
             <div className="flex items-center space-x-2 relative">
+              <button
+                onClick={() => router.push(`/tasks/${taskId}/create`)}
+                className="flex items-center space-x-2 bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700"
+              >
+                <FileText className="w-4 h-4" />
+                <span>生成报告</span>
+              </button>
               <div className="relative">
                 <button
                   onClick={() => setShowImportMenu(!showImportMenu)}

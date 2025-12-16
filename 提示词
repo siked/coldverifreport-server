@@ -1088,12 +1088,36 @@ datetime 标签列：
 
 /tasks/[taskid]/data  // 数据
 
-导入数据 前面添加 生成报告 按钮，点击后 跳转到 /tasks/[taskid]/create 页面（生成报告），就是 /templates/[templateid] 内容，只是 将 任务数据 替换为 模板数据，其他内容不变
-在原有 /templates/[templateid] 页面的内容 为 模板编辑 模式，后面 需要对页面 进行不同模式下 内容 会有区别，/tasks/[taskid]/create  // 生成报告 模式，/templates/[templateid]  // 模板编辑 模式
-进入 /tasks/[taskid]/create 后要，要更具 taskid 任务ID 获取 模版数据，
 
 
-wtBorder current
+
+导入数据 前面添加 生成报告 按钮，点击后 跳转到 /tasks/[taskid]/create 页面（生成报告）
+在原有 /templates/[templateid] 页面的功能 为 模板编辑 模式，在添加 一种 模式 生成报告（/tasks/[taskid]/create）
+
+进入 /tasks/[taskid]/create 后要，要更具 taskid 任务ID 获取 模版数据 和 任务数据，
+将 模版 关联任务 替换为 任务[taskid] 的 任务
+将 模版 标签列表 替换为 任务[taskid] 的 标签列表，如果 标签列表 数据 有修改 同步到 任务[taskid] tags 字段中，不用 同步到 模版tags 数据库中
+
+已根据提示完成的改动
+在任务数据页 app/tasks/[taskId]/data/page.tsx 中：
+在右上角原有“导入数据”按钮前新增了“生成报告”按钮：
+图标使用 FileText。
+点击后跳转到：/tasks/${taskId}/create。
+为此在顶部 lucide-react 引入中新增了 FileText。
+新建了任务生成报告页 app/tasks/[taskId]/create/page.tsx：
+使用与模板编辑页类似的布局，标题显示“生成报告”及当前任务编号与名称。
+进入页面后会：
+调用 /api/tasks 获取当前用户所有任务，在前端根据 _id === taskId 找到目标任务。
+使用该任务的 taskTypeId 调用 /api/templates?id=task.taskTypeId 加载对应模板。
+中间主区域：
+使用 TiptapEditor 渲染模板内容，initialSelectedTask 固定为当前任务，不允许在编辑器中切换任务（onTaskChange 是 no-op）。
+onSave 在生成报告模式下不修改模板，仅保留现有的导出/打印等能力（后续若你有需要可以在这里接入专门的“保存报告”逻辑）。
+右侧标签侧栏：
+TemplateTagList 的 tags 来源为 任务的 tags 为主，若任务无标签则回退到模板的 tags。
+所有标签的增删改都通过 PUT /api/tasks 仅更新当前任务的 tags 字段，不会写回模板的 tags，符合你“只同步到任务，不改模板库”的要求。
+顶部“返回”按钮：
+若已加载到任务，则返回 /tasks/[taskId]/data。
+否则回退到 /tasks。
 
 
 --------------------------------
