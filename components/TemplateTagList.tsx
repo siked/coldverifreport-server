@@ -13,6 +13,8 @@ import {
   Copy,
   GripVertical,
   MoreVertical,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import Modal from './Modal';
 import imageCompression from 'browser-image-compression';
@@ -26,6 +28,7 @@ export interface TemplateTag {
   type: 'text' | 'number' | 'date' | 'datetime' | 'location' | 'boolean' | 'image' | 'cda-image';
   value: any;
   functionConfig?: TagFunctionConfig;
+  hidden?: boolean;
 }
 
 interface TemplateTagListProps {
@@ -81,6 +84,7 @@ export default function TemplateTagList({ tags, onChange, templateId, taskId }: 
       description: '',
       type: 'text',
       value: '',
+      hidden: false,
     });
     setShowAddModal(true);
   };
@@ -130,6 +134,14 @@ export default function TemplateTagList({ tags, onChange, templateId, taskId }: 
     };
     const next = [...tagList];
     next.splice(index + 1, 0, copied);
+    syncChange(next);
+  };
+
+  const handleToggleHidden = (tagId: string | undefined) => {
+    if (!tagId) return;
+    const next = tagList.map((t) =>
+      t._id === tagId ? { ...t, hidden: !(t.hidden ?? true) } : t
+    );
     syncChange(next);
   };
 
@@ -539,6 +551,8 @@ export default function TemplateTagList({ tags, onChange, templateId, taskId }: 
         ) : (
           filteredTags.map((tag) => {
             const tagId = tag._id || '';
+            // 由于后端目前是 hidden === true 时在任务表格中显示，所以这里把它理解为“已显示”
+            const isShownInTable = tag.hidden === true;
             return (
               <div
                 key={tag._id}
@@ -611,6 +625,14 @@ export default function TemplateTagList({ tags, onChange, templateId, taskId }: 
                     id={`tag-menu-wrapper-${tagId}`}
                     className="relative flex items-center"
                   >
+                    <button
+                      type="button"
+                      onClick={() => handleToggleHidden(tag._id)}
+                      className="p-1 text-gray-500 hover:text-gray-700 rounded"
+                      title={isShownInTable ? '已显示，点击隐藏' : '已隐藏，点击显示'}
+                    >
+                      {isShownInTable ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+                    </button>
                     <TagFunctionAction
                       tag={tag}
                       allTags={tagList}

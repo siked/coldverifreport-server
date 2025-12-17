@@ -215,6 +215,14 @@ export default function TemplateEditorPage({ params }: { params: Promise<{ id: s
     }
   }, [isEditingName]);
 
+  // 动态设置网页标题：模版[任务名称]
+  useEffect(() => {
+    const taskName = selectedTask?.taskName || template?.name;
+    if (typeof document !== 'undefined') {
+      document.title = taskName ? `模版-${taskName}` : '模版编辑';
+    }
+  }, [selectedTask?.taskName, template?.name]);
+
   const renderContent = () => {
     if (loading) {
       return (

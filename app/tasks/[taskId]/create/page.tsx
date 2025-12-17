@@ -222,6 +222,14 @@ export default function TaskReportCreatePage({
     );
   };
 
+  useEffect(() => {
+    if (task?.taskName) {
+      document.title = `生成-${task.taskName}`;
+    } else {
+      document.title = '生成报告';
+    }
+  }, [task?.taskName]);
+
   return (
     <Layout>
       <div className="h-[calc(100vh-4rem)] flex flex-col">

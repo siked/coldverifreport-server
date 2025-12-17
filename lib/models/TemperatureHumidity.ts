@@ -17,6 +17,7 @@ export interface Device {
   taskId: string; // 任务ID
   deviceId: string; // 设备ID
   deviceName?: string; // 设备名称（可选）
+  deviceSn?: string; // 设备SN（可选）
   createdAt?: Date;
 }
 
@@ -180,6 +181,8 @@ export async function getDevicesByTask(taskId: string): Promise<Device[]> {
   const db = client.db();
   const collectionName = getCollectionName(taskId);
   const collection = db.collection<TemperatureHumidityData>(collectionName);
+  const deviceMetaCollectionName = getDeviceMetaCollectionName(taskId);
+  const deviceMetaCollection = db.collection<Device>(deviceMetaCollectionName);
 
   // 使用聚合查询获取唯一的设备列表
   // 由于每个任务有独立集合，不需要在match中包含taskId
@@ -201,6 +204,12 @@ export async function getDevicesByTask(taskId: string): Promise<Device[]> {
       { $sort: { createdAt: 1 } },
     ])
     .toArray();
+
+  // 获取设备元数据
+  const deviceMetas = await deviceMetaCollection
+    .find({ taskId })
+    .toArray();
+  const metaMap = new Map(deviceMetas.map((meta) => [meta.deviceId, meta]));
 
   return devices.map((d) => ({
     taskId,

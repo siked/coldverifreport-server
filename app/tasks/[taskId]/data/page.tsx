@@ -25,6 +25,9 @@ import {
   clearAllCache,
   getAllCachedData,
   getCachedDevices,
+  saveDeviceSn,
+  getAllDeviceSns,
+  renameDeviceId,
   type TemperatureHumidityData as CacheData,
 } from '@/lib/cache';
 import LZString from 'lz-string';
@@ -44,6 +47,7 @@ interface Device {
   deviceId: string;
   createdAt?: string;
   deviceName?: string;
+  deviceSn?: string;
 }
 
 interface Task {
@@ -164,7 +168,6 @@ export default function TaskDataPage() {
     targetTimestamp: number;
     isSelectionArea: boolean;
   } | null>(null);
-  const [deviceNameMap, setDeviceNameMap] = useState<Record<string, { name?: string; sn?: string; deviceNumber?: string }>>({});
   const [showCreateDeviceDialog, setShowCreateDeviceDialog] = useState(false);
   const [createDeviceInput, setCreateDeviceInput] = useState('');
   const [createDeviceError, setCreateDeviceError] = useState<string | null>(null);
@@ -176,12 +179,13 @@ export default function TaskDataPage() {
     y: number;
     deviceId: string;
   } | null>(null);
-  const [editingDeviceName, setEditingDeviceName] = useState<{
+  const [editingDeviceSn, setEditingDeviceSn] = useState<{
     deviceId: string;
-    currentName: string;
+    currentDeviceId: string;
     currentSn: string;
-    currentDeviceNumber: string;
   } | null>(null);
+  const [deviceSnMap, setDeviceSnMap] = useState<Record<string, string>>({});
+  const [deviceIdError, setDeviceIdError] = useState<string | null>(null);
   const chartRangeRef = useRef<{ min: number; max: number } | null>(null);
   const chartComponentRef = useRef<HighchartsReactRefObject | null>(null);
   const rightPanStateRef = useRef<{
@@ -266,47 +270,12 @@ export default function TaskDataPage() {
       }
     });
     updateCacheStats();
+    // 加载设备 SN 映射
+    getAllDeviceSns(taskId).then((snMap) => {
+      setDeviceSnMap(snMap);
+    });
   }, [fetchDevices, fetchTask, selectedDeviceId, taskId, updateCacheStats]);
 
-  // 加载并保存设备名称映射（仅保存在本地浏览器）
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const raw = window.localStorage.getItem(`task-device-names-${taskId}`);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        // 兼容旧格式：如果是字符串，转换为新格式
-        const migrated: Record<string, { name?: string; sn?: string; deviceNumber?: string }> = {};
-        for (const [key, value] of Object.entries(parsed)) {
-          if (typeof value === 'string') {
-            migrated[key] = { name: value };
-          } else {
-            migrated[key] = value as { name?: string; sn?: string; deviceNumber?: string };
-          }
-        }
-        setDeviceNameMap(migrated);
-      }
-    } catch (error) {
-      console.warn('加载本地设备名称失败:', error);
-    }
-  }, [taskId]);
-
-  const persistDeviceNameMap = useCallback(
-    (next: Record<string, { name?: string; sn?: string; deviceNumber?: string }>) => {
-      setDeviceNameMap(next);
-      if (typeof window !== 'undefined') {
-        try {
-          window.localStorage.setItem(
-            `task-device-names-${taskId}`,
-            JSON.stringify(next)
-          );
-        } catch (error) {
-          console.warn('保存本地设备名称失败:', error);
-        }
-      }
-    },
-    [taskId]
-  );
 
   // 解析批量设备范围，如 C001 到 C010 / C001-C010 / 001~010 等
   const parseDeviceRange = useCallback((value: string): string[] | null => {
@@ -991,36 +960,175 @@ export default function TaskDataPage() {
     }
   };
 
-  // 仅编辑设备SN和设备编号（不影响服务器，只保存在本地）
-  const handleEditDeviceName = useCallback(
+  // 编辑设备信息（ID和SN）
+  const handleEditDeviceSn = useCallback(
     (deviceId: string) => {
-      const current = deviceNameMap[deviceId] || {};
-      setEditingDeviceName({
+      setEditingDeviceSn({
         deviceId,
-        currentName: '', // 不再使用，保留以兼容类型
-        currentSn: current.sn || '',
-        currentDeviceNumber: current.deviceNumber || '',
+        currentDeviceId: deviceId,
+        currentSn: deviceSnMap[deviceId] || '',
       });
+      setDeviceIdError(null);
     },
-    [deviceNameMap]
+    [deviceSnMap]
   );
 
-  const handleSaveDeviceName = useCallback(() => {
-    if (!editingDeviceName) return;
-    const nextSn = editingDeviceName.currentSn.trim();
-    const nextDeviceNumber = editingDeviceName.currentDeviceNumber.trim();
-    const nextMap = { ...deviceNameMap };
-    if (nextSn || nextDeviceNumber) {
-      nextMap[editingDeviceName.deviceId] = {
-        ...(nextSn ? { sn: nextSn } : {}),
-        ...(nextDeviceNumber ? { deviceNumber: nextDeviceNumber } : {}),
-      };
-    } else {
-      delete nextMap[editingDeviceName.deviceId];
+  const handleSaveDeviceSn = useCallback(async () => {
+    if (!editingDeviceSn) return;
+    
+    const newDeviceId = editingDeviceSn.currentDeviceId.trim();
+    const oldDeviceId = editingDeviceSn.deviceId;
+    const snValue = editingDeviceSn.currentSn.trim() || undefined;
+
+    // 验证设备ID
+    if (!newDeviceId) {
+      setDeviceIdError('设备ID不能为空');
+      return;
     }
-    persistDeviceNameMap(nextMap);
-    setEditingDeviceName(null);
-  }, [editingDeviceName, deviceNameMap, persistDeviceNameMap]);
+
+    // 检查是否有重复的设备ID（排除当前设备）
+    if (newDeviceId !== oldDeviceId) {
+      const existingDevice = devices.find((d) => d.deviceId === newDeviceId);
+      if (existingDevice) {
+        setDeviceIdError(`设备ID "${newDeviceId}" 已存在`);
+        return;
+      }
+    }
+
+    setDeviceIdError(null);
+
+    try {
+      // 如果设备ID改变了，需要重命名
+      if (newDeviceId !== oldDeviceId) {
+        await renameDeviceId(taskId, oldDeviceId, newDeviceId);
+
+        // 更新设备SN映射
+        setDeviceSnMap((prev) => {
+          const next = { ...prev };
+          const oldSn = next[oldDeviceId];
+          if (oldSn) {
+            delete next[oldDeviceId];
+            if (snValue) {
+              next[newDeviceId] = snValue;
+            }
+          } else if (snValue) {
+            next[newDeviceId] = snValue;
+          }
+          return next;
+        });
+
+        // 更新设备列表
+        setDevices((prev) =>
+          prev.map((device) =>
+            device.deviceId === oldDeviceId
+              ? { ...device, deviceId: newDeviceId, deviceSn: snValue }
+              : device
+          )
+        );
+
+        // 更新渲染设备列表
+        setRenderDeviceIds((prev) =>
+          prev.map((id) => (id === oldDeviceId ? newDeviceId : id))
+        );
+
+        // 更新选中的设备ID
+        if (selectedDeviceId === oldDeviceId) {
+          setSelectedDeviceId(newDeviceId);
+        }
+
+        // 更新缓存设备ID列表
+        setCachedDeviceIds((prev) =>
+          prev.map((id) => (id === oldDeviceId ? newDeviceId : id))
+        );
+
+        // 更新缓存计数
+        setCachedCounts((prev) => {
+          const next = { ...prev };
+          const count = next[oldDeviceId];
+          if (count !== undefined) {
+            delete next[oldDeviceId];
+            next[newDeviceId] = count;
+          }
+          return next;
+        });
+
+        // 更新设备数据映射
+        setDeviceDataMap((prev) => {
+          const next = { ...prev };
+          const data = next[oldDeviceId];
+          if (data) {
+            delete next[oldDeviceId];
+            // 更新数据中的deviceId
+            next[newDeviceId] = data.map((item) => ({
+              ...item,
+              deviceId: newDeviceId,
+            }));
+          }
+          return next;
+        });
+
+        // 如果当前选中的设备被重命名，更新数据
+        if (selectedDeviceId === oldDeviceId) {
+          const updatedData = deviceDataMap[oldDeviceId]?.map((item) => ({
+            ...item,
+            deviceId: newDeviceId,
+          }));
+          if (updatedData) {
+            setData(updatedData);
+          }
+        }
+
+        await updateCacheStats();
+      } else {
+        // 只更新SN
+        await saveDeviceSn(taskId, newDeviceId, snValue);
+
+        // 更新本地状态
+        setDeviceSnMap((prev) => {
+          const next = { ...prev };
+          if (snValue) {
+            next[newDeviceId] = snValue;
+          } else {
+            delete next[newDeviceId];
+          }
+          return next;
+        });
+
+        // 更新设备列表中的 deviceSn
+        setDevices((prev) =>
+          prev.map((device) =>
+            device.deviceId === newDeviceId
+              ? { ...device, deviceSn: snValue }
+              : device
+          )
+        );
+      }
+
+      setAlert({
+        isOpen: true,
+        message: newDeviceId !== oldDeviceId
+          ? `设备ID已从 "${oldDeviceId}" 重命名为 "${newDeviceId}"`
+          : '设备信息更新成功',
+        type: 'success',
+      });
+      setEditingDeviceSn(null);
+    } catch (error: any) {
+      setAlert({
+        isOpen: true,
+        message: error.message || '更新设备信息失败',
+        type: 'error',
+      });
+    }
+  }, [
+    editingDeviceSn,
+    taskId,
+    devices,
+    selectedDeviceId,
+    deviceDataMap,
+    setDevices,
+    setAlert,
+    updateCacheStats,
+  ]);
 
   // 删除整台设备的数据（服务器 + 本地缓存）
   const handleDeleteDevice = useCallback(
@@ -2337,6 +2445,14 @@ const collectSelectionData = useCallback(
     };
   }, [activeTab, chartSeriesData, renderDeviceIds, handleAfterSetExtremes, handleChartSelection]);
 
+  useEffect(() => {
+    if (task?.taskName) {
+      document.title = `数据-${task.taskName}`;
+    } else {
+      document.title = '数据';
+    }
+  }, [task?.taskName]);
+
   return (
     <Layout>
       <div className="h-[calc(100vh-4rem)] flex flex-col">
@@ -2498,14 +2614,7 @@ const collectSelectionData = useCallback(
                               <div className="flex flex-col text-left">
                                 <span 
                                   className="font-medium"
-                                  title={(() => {
-                                    const info = deviceNameMap[device.deviceId];
-                                    if (!info) return undefined;
-                                    const parts: string[] = [];
-                                    if (info.sn) parts.push(`SN: ${info.sn}`);
-                                    if (info.deviceNumber) parts.push(`编号: ${info.deviceNumber}`);
-                                    return parts.length > 0 ? parts.join('\n') : undefined;
-                                  })()}
+                                  title={deviceSnMap[device.deviceId] ? `SN: ${deviceSnMap[device.deviceId]}` : undefined}
                                 >
                                   {device.deviceId}
                                 </span>
@@ -3044,13 +3153,13 @@ const collectSelectionData = useCallback(
               </div>
               <button
                 onClick={() => {
-                  handleEditDeviceName(deviceContextMenu.deviceId);
+                  handleEditDeviceSn(deviceContextMenu.deviceId);
                   setDeviceContextMenu(null);
                 }}
                 className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 flex items-center gap-2"
               >
                 <Edit2 className="w-4 h-4" />
-                编辑
+                编辑设备
               </button>
               <button
                 onClick={() => {
@@ -3081,16 +3190,44 @@ const collectSelectionData = useCallback(
           </div>
         )}
 
-        {/* 编辑设备名称弹窗 */}
-        {editingDeviceName && (
+        {/* 编辑设备信息弹窗 */}
+        {editingDeviceSn && (
           <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
             <div className="bg-white rounded-lg shadow-xl w-full max-w-sm mx-4">
               <div className="p-6 space-y-4">
                 <div>
                   <h3 className="text-lg font-semibold text-gray-800">编辑设备信息</h3>
-                  <p className="mt-2 text-sm text-gray-600">
-                    设备ID：{editingDeviceName.deviceId}
-                  </p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    设备ID <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={editingDeviceSn.currentDeviceId}
+                    onChange={(e) => {
+                      setEditingDeviceSn({
+                        ...editingDeviceSn,
+                        currentDeviceId: e.target.value,
+                      });
+                      setDeviceIdError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        handleSaveDeviceSn();
+                      } else if (e.key === 'Escape') {
+                        setEditingDeviceSn(null);
+                      }
+                    }}
+                    placeholder="设备ID"
+                    className={`w-full px-4 py-2 border rounded-md focus:ring-2 focus:ring-primary-500 ${
+                      deviceIdError ? 'border-red-300' : 'border-gray-300'
+                    }`}
+                    autoFocus
+                  />
+                  {deviceIdError && (
+                    <p className="mt-1 text-xs text-red-600">{deviceIdError}</p>
+                  )}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -3098,60 +3235,38 @@ const collectSelectionData = useCallback(
                   </label>
                   <input
                     type="text"
-                    value={editingDeviceName.currentSn}
+                    value={editingDeviceSn.currentSn}
                     onChange={(e) =>
-                      setEditingDeviceName({
-                        ...editingDeviceName,
+                      setEditingDeviceSn({
+                        ...editingDeviceSn,
                         currentSn: e.target.value,
                       })
                     }
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
-                        handleSaveDeviceName();
+                        handleSaveDeviceSn();
                       } else if (e.key === 'Escape') {
-                        setEditingDeviceName(null);
+                        setEditingDeviceSn(null);
                       }
                     }}
                     placeholder="设备序列号"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500"
-                    autoFocus
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    设备编号（可选）
-                  </label>
-                  <input
-                    type="text"
-                    value={editingDeviceName.currentDeviceNumber}
-                    onChange={(e) =>
-                      setEditingDeviceName({
-                        ...editingDeviceName,
-                        currentDeviceNumber: e.target.value,
-                      })
-                    }
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        handleSaveDeviceName();
-                      } else if (e.key === 'Escape') {
-                        setEditingDeviceName(null);
-                      }
-                    }}
-                    placeholder="设备编号"
                     className="w-full px-4 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-primary-500"
                   />
                 </div>
                 <div className="flex justify-end gap-2 pt-2">
                   <button
                     type="button"
-                    onClick={() => setEditingDeviceName(null)}
+                    onClick={() => {
+                      setEditingDeviceSn(null);
+                      setDeviceIdError(null);
+                    }}
                     className="px-4 py-2 text-sm rounded border border-gray-200 text-gray-600 hover:bg-gray-50"
                   >
                     取消
                   </button>
                   <button
                     type="button"
-                    onClick={handleSaveDeviceName}
+                    onClick={handleSaveDeviceSn}
                     className="px-4 py-2 text-sm rounded bg-primary-600 text-white hover:bg-primary-700"
                   >
                     保存

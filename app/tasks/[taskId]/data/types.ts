@@ -10,6 +10,7 @@ export interface TemperatureHumidityData {
 export interface Device {
   deviceId: string;
   createdAt?: string;
+  deviceSn?: string;
 }
 
 export interface Task {

@@ -22,6 +22,7 @@ export interface CacheMeta {
   deviceId: string;
   lastUpdated: number;
   dataCount: number;
+  deviceSn?: string;
 }
 
 export interface TemperatureHumidityData {
@@ -486,5 +487,161 @@ export async function getCacheStats(taskId: string): Promise<{
     totalDataCount,
     cacheSize,
   };
+}
+
+/**
+ * 保存设备 SN 到 IndexedDB
+ */
+export async function saveDeviceSn(taskId: string, deviceId: string, deviceSn?: string): Promise<void> {
+  if (!isIndexedDBAvailable()) {
+    return;
+  }
+
+  try {
+    const meta = await loadMetaFromIndexedDB(taskId);
+    if (!meta || !meta[deviceId]) {
+      // 如果设备元数据不存在，先创建一个基本的元数据
+      const data = await loadFromCache(taskId, deviceId);
+      const dataCount = data?.length ?? 0;
+      if (!meta) {
+        await saveMetaToIndexedDB(taskId, {
+          [deviceId]: {
+            taskId,
+            deviceId,
+            lastUpdated: Date.now(),
+            dataCount,
+            deviceSn: deviceSn?.trim() || undefined,
+          },
+        });
+      } else {
+        meta[deviceId] = {
+          taskId,
+          deviceId,
+          lastUpdated: Date.now(),
+          dataCount,
+          deviceSn: deviceSn?.trim() || undefined,
+        };
+        await saveMetaToIndexedDB(taskId, meta);
+      }
+    } else {
+      // 更新现有元数据
+      meta[deviceId] = {
+        ...meta[deviceId],
+        deviceSn: deviceSn?.trim() || undefined,
+      };
+      await saveMetaToIndexedDB(taskId, meta);
+    }
+  } catch (error) {
+    console.error('保存设备SN失败:', error);
+    throw error;
+  }
+}
+
+/**
+ * 获取设备 SN
+ */
+export async function getDeviceSn(taskId: string, deviceId: string): Promise<string | undefined> {
+  if (!isIndexedDBAvailable()) {
+    return undefined;
+  }
+
+  try {
+    const meta = await loadMetaFromIndexedDB(taskId);
+    return meta?.[deviceId]?.deviceSn;
+  } catch (error) {
+    console.error('获取设备SN失败:', error);
+    return undefined;
+  }
+}
+
+/**
+ * 获取所有设备的 SN 映射
+ */
+export async function getAllDeviceSns(taskId: string): Promise<Record<string, string>> {
+  if (!isIndexedDBAvailable()) {
+    return {};
+  }
+
+  try {
+    const meta = await loadMetaFromIndexedDB(taskId);
+    if (!meta) {
+      return {};
+    }
+
+    const snMap: Record<string, string> = {};
+    for (const [deviceId, deviceMeta] of Object.entries(meta)) {
+      if (deviceMeta.deviceSn) {
+        snMap[deviceId] = deviceMeta.deviceSn;
+      }
+    }
+    return snMap;
+  } catch (error) {
+    console.error('获取所有设备SN失败:', error);
+    return {};
+  }
+}
+
+/**
+ * 重命名设备ID（更新IndexedDB中的key和数据）
+ */
+export async function renameDeviceId(
+  taskId: string,
+  oldDeviceId: string,
+  newDeviceId: string
+): Promise<void> {
+  if (!isIndexedDBAvailable()) {
+    throw new Error('IndexedDB 不可用');
+  }
+
+  if (oldDeviceId === newDeviceId) {
+    return; // 无需重命名
+  }
+
+  try {
+    // 1. 读取旧设备ID的温湿度数据
+    const oldData = await loadFromCache(taskId, oldDeviceId);
+    
+    if (!oldData || oldData.length === 0) {
+      // 如果没有数据，只需要更新元数据和SN映射
+      const meta = await loadMetaFromIndexedDB(taskId);
+      if (meta && meta[oldDeviceId]) {
+        // 更新元数据中的设备ID
+        meta[newDeviceId] = {
+          ...meta[oldDeviceId],
+          deviceId: newDeviceId,
+        };
+        delete meta[oldDeviceId];
+        await saveMetaToIndexedDB(taskId, meta);
+      }
+      return;
+    }
+
+    // 2. 更新数据中的deviceId字段
+    const newData: TemperatureHumidityData[] = oldData.map((item) => ({
+      ...item,
+      deviceId: newDeviceId,
+    }));
+
+    // 3. 保存到新设备ID的key下
+    await saveToCache(taskId, newDeviceId, newData);
+
+    // 4. 删除旧设备ID的数据
+    await deleteFromIndexedDB(getCacheKey(taskId, oldDeviceId), taskId, oldDeviceId);
+
+    // 5. 更新元数据
+    const meta = await loadMetaFromIndexedDB(taskId);
+    if (meta && meta[oldDeviceId]) {
+      // 将旧设备ID的元数据移到新设备ID
+      meta[newDeviceId] = {
+        ...meta[oldDeviceId],
+        deviceId: newDeviceId,
+      };
+      delete meta[oldDeviceId];
+      await saveMetaToIndexedDB(taskId, meta);
+    }
+  } catch (error) {
+    console.error('重命名设备ID失败:', error);
+    throw error;
+  }
 }
 

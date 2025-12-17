@@ -23,6 +23,7 @@ interface TemplateTag {
   type: 'text' | 'number' | 'date' | 'datetime' | 'location' | 'boolean' | 'image' | 'cda-image';
   value: any;
   functionConfig?: any;
+  hidden?: boolean;
 }
 
 interface Task {
@@ -405,7 +406,10 @@ export default function TasksPage() {
   // 准备表格数据
   const tableData = useMemo(() => {
     if (!showTaskList || tasks.length === 0) return [];
-    
+
+    // 只有 hidden 为 true 的标签才在表格中显示
+    const visibleTemplateTags = templateTags.filter((t) => t.hidden === true);
+
     return tasks.map((task) => {
       const row: any = {
         _id: task._id,
@@ -419,6 +423,8 @@ export default function TasksPage() {
       // 添加标签字段
       if (task.tags && task.tags.length > 0) {
         task.tags.forEach((tag) => {
+          // 只有 hidden 为 true 的标签才显示
+          if (tag.hidden !== true) return;
           // 对于图片类型，直接使用原始值（图片URL），而不是格式化后的值
           if (tag.type === 'image' || tag.type === 'cda-image') {
             row[`tag_${tag._id || tag.name}`] = tag.value || '';
@@ -427,9 +433,9 @@ export default function TasksPage() {
           }
           row[`_tag_${tag._id || tag.name}`] = tag; // 保存原始标签对象
         });
-      } else if (templateTags.length > 0) {
+      } else if (visibleTemplateTags.length > 0) {
         // 如果任务没有标签，使用模板标签的默认值
-        templateTags.forEach((tag) => {
+        visibleTemplateTags.forEach((tag) => {
           // 对于图片类型，直接使用原始值（图片URL），而不是格式化后的值
           if (tag.type === 'image' || tag.type === 'cda-image') {
             row[`tag_${tag._id || tag.name}`] = getTagValue(tag) || '';
@@ -969,8 +975,10 @@ export default function TasksPage() {
       }},
     ];
 
-    // 添加标签列
-    templateTags.forEach((tag) => {
+    // 添加标签列（只显示 hidden 为 true 的标签）
+    const visibleTemplateTags = templateTags.filter((t) => t.hidden === true);
+
+    visibleTemplateTags.forEach((tag) => {
       const tagKey = `tag_${tag._id || tag.name}`;
       let editor: any = 'text';
       let renderer: any = undefined;

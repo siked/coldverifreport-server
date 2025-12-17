@@ -20,6 +20,7 @@ interface Device {
   deviceId: string;
   createdAt?: string;
   deviceName?: string;
+  deviceSn?: string;
 }
 
 interface Task {
