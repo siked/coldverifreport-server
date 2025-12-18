@@ -72,6 +72,16 @@ export default function Navbar() {
             >
               模板管理
             </Link>
+            <Link
+              href="/certificates"
+              className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                isActive('/certificates')
+                  ? 'bg-primary-100 text-primary-700'
+                  : 'text-gray-700 hover:bg-gray-100'
+              }`}
+            >
+              校准证书
+            </Link>
           </div>
 
           <div className="relative">

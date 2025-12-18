@@ -169,3 +169,24 @@ export async function uploadImageToQiniu(
   return uploadToQiniu(compressedBuffer, fileName);
 }
 
+// 上传PDF到七牛云（自动生成随机文件名）
+export async function uploadPdfToQiniu(
+  buffer: Buffer,
+  userId: string,
+  originalFileName?: string
+): Promise<string> {
+  const fileSizeKB = (buffer.length / 1024).toFixed(2);
+  console.log(`[七牛云上传PDF] 开始上传: ${originalFileName || 'unknown'} (${fileSizeKB} KB)`);
+  
+  // 验证文件大小（限制为 50MB）
+  const maxSize = 50 * 1024 * 1024; // 50MB
+  if (buffer.length > maxSize) {
+    throw new Error('PDF文件大小不能超过 50MB');
+  }
+
+  // 使用完全随机的文件名（时间戳 + UUID）
+  const fileName = `certificates/${userId}/${Date.now()}-${uuidv4()}.pdf`;
+
+  return uploadToQiniu(buffer, fileName);
+}
+

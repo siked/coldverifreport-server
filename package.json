@@ -39,6 +39,7 @@
     "date-fns": "^3.0.6",
     "dayjs": "^1.11.19",
     "docx": "^9.5.1",
+    "graceful-fs": "^4.2.11",
     "handsontable": "^16.2.0",
     "highcharts": "^12.4.0",
     "highcharts-react-official": "^3.2.3",
