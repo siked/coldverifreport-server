@@ -69,6 +69,23 @@ export const useTaskDataLayer = ({
     [onDeviceDataUpdated]
   );
 
+  const applyMultiDeviceDataUpdate = useCallback(
+    (updates: Record<string, TemperatureHumidityData[]>) => {
+      setDeviceDataMap((prev) => {
+        const next = { ...prev };
+        Object.entries(updates).forEach(([deviceId, dataset]) => {
+          const sorted = [...dataset].sort(
+            (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+          );
+          next[deviceId] = sorted;
+          onDeviceDataUpdated?.(deviceId, sorted);
+        });
+        return next;
+      });
+    },
+    [onDeviceDataUpdated]
+  );
+
   const updateCacheStats = useCallback(async () => {
     const stats = await getCacheStats(taskId);
     setCacheStats(stats);
@@ -290,6 +307,7 @@ export const useTaskDataLayer = ({
     setDeviceLoadingState,
     isCachingAll,
     applyDeviceDataUpdate,
+    applyMultiDeviceDataUpdate,
     updateCacheStats,
     fetchTask,
     fetchDevices,
