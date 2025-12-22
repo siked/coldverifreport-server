@@ -40,6 +40,8 @@ export const useChartEvents = ({
 }: UseChartEventsProps) => {
   const chartRangeRef = useRef<ChartRange | null>(null);
   const isCorrectingExtremesRef = useRef<boolean>(false);
+  // 记录用户期望的范围（来自滚轮/拖拽等主动操作），用于防止 Highcharts 自动贴边
+  const desiredRangeRef = useRef<ChartRange | null>(null);
   const rightPanStateRef = useRef<{
     isPanning: boolean;
     startX: number;
@@ -131,21 +133,40 @@ export const useChartEvents = ({
       let newMax = newMin + newRange;
 
       // 确保缩放后的范围不超出数据的时间范围
+      // 优先保持鼠标指针的相对位置，而不是简单地调整到边界
       if (newMin < currentDataTimeRange.min) {
+        const overflow = currentDataTimeRange.min - newMin;
         newMin = currentDataTimeRange.min;
         newMax = newMin + newRange;
-      }
-      if (newMax > currentDataTimeRange.max) {
+        // 如果调整后仍然超出上边界，说明范围太大，需要缩小范围
+        if (newMax > currentDataTimeRange.max) {
+          newMax = currentDataTimeRange.max;
+          newMin = currentDataTimeRange.max - newRange;
+          // 如果缩小后仍然超出下边界，说明数据范围太小，使用完整范围
+          if (newMin < currentDataTimeRange.min) {
+            newMin = currentDataTimeRange.min;
+            newMax = currentDataTimeRange.max;
+          }
+        }
+      } else if (newMax > currentDataTimeRange.max) {
+        const overflow = newMax - currentDataTimeRange.max;
         newMax = currentDataTimeRange.max;
         newMin = newMax - newRange;
-        // 再次检查，确保 newMin 不小于最小值
+        // 如果调整后仍然超出下边界，说明范围太大，需要缩小范围
         if (newMin < currentDataTimeRange.min) {
           newMin = currentDataTimeRange.min;
-          newMax = currentDataTimeRange.max;
+          newMax = currentDataTimeRange.min + newRange;
+          // 如果缩小后仍然超出上边界，说明数据范围太小，使用完整范围
+          if (newMax > currentDataTimeRange.max) {
+            newMin = currentDataTimeRange.min;
+            newMax = currentDataTimeRange.max;
+          }
         }
       }
 
       xAxis.setExtremes(newMin, newMax, true, false);
+      // 记录用户期望的范围，便于 afterSetExtremes 发现被贴边时恢复
+      desiredRangeRef.current = { min: newMin, max: newMax };
     },
     [chartComponentRef, currentDataTimeRange]
   );
@@ -252,6 +273,39 @@ export const useChartEvents = ({
       }
       
       if (typeof event.min === 'number' && typeof event.max === 'number') {
+        // 如果有用户期望的范围且当前事件范围与期望不一致，且 max 被贴到 dataMax，尝试恢复
+        if (
+          !isCorrectingExtremesRef.current &&
+          desiredRangeRef.current &&
+          mainXAxis
+        ) {
+          const desired = desiredRangeRef.current;
+          const incoming = { min: event.min, max: event.max };
+          const isIncomingAtRightEdge = Math.round(incoming.max) === Math.round(dataTimeRange.max);
+          const isDesiredAtRightEdge = Math.round(desired.max) === Math.round(dataTimeRange.max);
+          const isDifferent = !isRangeEqual(desired, incoming);
+          if (isDifferent && !isDesiredAtRightEdge && isIncomingAtRightEdge) {
+            isCorrectingExtremesRef.current = true;
+            mainXAxis.setExtremes(desired.min, desired.max, true, false);
+            setTimeout(() => {
+              isCorrectingExtremesRef.current = false;
+            }, 0);
+            return;
+          }
+        }
+        // 如果是 navigator 触发的事件，并且已经有记忆的范围，则恢复记忆范围，避免被推到最右侧
+        if ((event as any).trigger === 'navigator' && chartRangeRef.current && mainXAxis) {
+          const rememberRange = chartRangeRef.current;
+          const incomingRange = { min: event.min, max: event.max };
+          if (!isRangeEqual(rememberRange, incomingRange)) {
+            isCorrectingExtremesRef.current = true;
+            mainXAxis.setExtremes(rememberRange.min, rememberRange.max, true, false);
+            setTimeout(() => {
+              isCorrectingExtremesRef.current = false;
+            }, 0);
+            return;
+          }
+        }
         // 验证并限制范围在数据的时间范围内
         const dataMin = dataTimeRange.min;
         const dataMax = dataTimeRange.max;
@@ -269,8 +323,33 @@ export const useChartEvents = ({
         }
         
         if (dataRange > 0) {
+          // 先检查是否需要修正边界
+          const needsMinCorrection = event.min < dataMin;
+          const needsMaxCorrection = event.max > dataMax;
+          
           let correctedMin = Math.max(event.min, dataMin);
           let correctedMax = Math.min(event.max, dataMax);
+          
+          // 如果范围超出边界，尝试保持中心点
+          if (needsMinCorrection || needsMaxCorrection) {
+            const originalCenter = (event.min + event.max) / 2;
+            const originalRange = event.max - event.min;
+            const targetRange = Math.max(originalRange, MIN_BUCKET_DURATION_MS);
+            
+            // 尝试以原始中心点为基准调整范围
+            correctedMin = Math.max(dataMin, originalCenter - targetRange / 2);
+            correctedMax = Math.min(dataMax, originalCenter + targetRange / 2);
+            
+            // 如果调整后仍然超出边界，则调整到边界，但尽量保持范围大小
+            if (correctedMin < dataMin) {
+              correctedMin = dataMin;
+              correctedMax = Math.min(dataMax, dataMin + targetRange);
+            }
+            if (correctedMax > dataMax) {
+              correctedMax = dataMax;
+              correctedMin = Math.max(dataMin, dataMax - targetRange);
+            }
+          }
           
           // 确保范围不小于最小值
           const currentRange = correctedMax - correctedMin;
@@ -280,14 +359,24 @@ export const useChartEvents = ({
             correctedMin = Math.max(dataMin, center - MIN_BUCKET_DURATION_MS / 2);
             correctedMax = Math.min(dataMax, center + MIN_BUCKET_DURATION_MS / 2);
             
-            // 如果仍然超出边界，则调整到边界
-            if (correctedMin < dataMin) {
+            // 如果仍然超出边界，则调整到边界，但尽量保持中心点
+            if (correctedMin < dataMin && correctedMax < dataMax) {
+              // 如果下边界超出，但上边界未超出，尽量保持上边界
+              const overflow = dataMin - correctedMin;
               correctedMin = dataMin;
-              correctedMax = Math.min(dataMax, dataMin + MIN_BUCKET_DURATION_MS);
+              correctedMax = Math.min(dataMax, correctedMax + overflow);
             }
-            if (correctedMax > dataMax) {
+            if (correctedMax > dataMax && correctedMin > dataMin) {
+              // 如果上边界超出，但下边界未超出，尽量保持下边界
+              const overflow = correctedMax - dataMax;
               correctedMax = dataMax;
-              correctedMin = Math.max(dataMin, dataMax - MIN_BUCKET_DURATION_MS);
+              correctedMin = Math.max(dataMin, correctedMin - overflow);
+            }
+            
+            // 如果两端都超出边界，使用完整范围
+            if (correctedMin < dataMin || correctedMax > dataMax) {
+              correctedMin = dataMin;
+              correctedMax = dataMax;
             }
             
             // 如果数据范围本身就小于最小值，则使用完整范围
@@ -324,6 +413,10 @@ export const useChartEvents = ({
         }
         chartRangeRef.current = nextRange;
         setChartRange(nextRange);
+        // 如果当前事件范围与期望一致，清除期望记录
+        if (desiredRangeRef.current && isRangeEqual(desiredRangeRef.current, nextRange)) {
+          desiredRangeRef.current = null;
+        }
       } else {
         if (isRangeEqual(chartRangeRef.current, null)) {
           return;

@@ -433,7 +433,8 @@ const CurveChartPanel = ({
         type: 'spline',
         backgroundColor: 'transparent',
         height: null,
-        spacing: [2, 2, 2, 2],
+        // 上、右、下、左留白；底部紧凑，左侧稍微多一点空间
+        spacing: [2, 2, 0, 8],
         zooming:
           mode === 'basic'
             ? {
@@ -460,7 +461,8 @@ const CurveChartPanel = ({
       title: { text: undefined },
       xAxis: {
         type: 'datetime',
-        title: { text: '时间' },
+        // 主图不显示底部“时间”文字标题，只保留刻度
+        title: { text: undefined },
         // 设置 softMin 和 softMax 来告诉 scrollbar 完整的数据范围
         // 这样 scrollbar 才能正确显示当前视图范围相对于总数据范围的比例
         softMin: dataTimeRange.min > 0 ? dataTimeRange.min : undefined,
@@ -484,8 +486,17 @@ const CurveChartPanel = ({
       },
       navigator: {
         enabled: true,
-        height: 0, // 隐藏 navigator，但保持启用以支持缩放功能
-        margin: 0,
+        height: 50, // 略微减小高度
+        margin: 2, // 缩略图与主图之间更贴近
+        series: {
+          type: 'spline', // 缩略图也使用曲线图，保持视觉一致
+        },
+        // 关闭缩略图底部的时间刻度文字，进一步减小视觉干扰
+        xAxis: {
+          labels: {
+            enabled: false,
+          },
+        },
       },
       rangeSelector: {
         enabled: false,
@@ -650,7 +661,39 @@ const CurveChartPanel = ({
                 {basicMode.contextMenuState.targetDeviceId || '未定位'}
               </span>
             </div>
-            
+            {/* 如果有复制数据，显示粘贴选项 */}
+            {basicMode.copiedData && (
+                  <>
+                    {basicMode.selectionRange && <div className="border-t border-gray-100" />}
+                    <button
+                      onClick={() => {
+                        basicMode.handlePaste(basicMode.contextMenuState?.targetDeviceId || null, basicMode.contextMenuState?.targetTimestamp || 0);
+                      }}
+                      className={`w-full text-left px-4 py-2 text-sm ${
+                        (basicMode.copiedData.copiedDeviceId !== null && !basicMode.contextMenuState.targetDeviceId) ||
+                        (basicMode.copiedData.copiedDeviceId === null && basicMode.contextMenuState.targetDeviceId !== null)
+                          ? 'text-gray-400 cursor-not-allowed bg-gray-50'
+                          : 'text-gray-700 hover:bg-gray-100'
+                      }`}
+                      disabled={
+                        // 如果复制时选择了设备，必须选择设备才能粘贴
+                        // 如果复制时没有选择设备，只能在空白处粘贴
+                        (basicMode.copiedData.copiedDeviceId !== null && !basicMode.contextMenuState.targetDeviceId) ||
+                        (basicMode.copiedData.copiedDeviceId === null && basicMode.contextMenuState.targetDeviceId !== null)
+                      }
+                    >
+                      粘贴
+                      {basicMode.copiedData.copiedDeviceId && (
+                        <span className="ml-2 text-xs text-gray-500">
+                          ({basicMode.copiedData.copiedDeviceId})
+                        </span>
+                      )}
+                      {basicMode.copiedData.copiedDeviceId === null && (
+                        <span className="ml-2 text-xs text-gray-500">(多设备)</span>
+                      )}
+                    </button>
+                  </>
+                )}
             {/* 如果有框选区域，显示框选相关操作 */}
             {basicMode.selectionRange && (
               <>
@@ -663,15 +706,7 @@ const CurveChartPanel = ({
                 >
                   复制
                 </button>
-                <button
-                  onClick={() => {
-                    basicMode.setContextMenuState(null);
-                    basicMode.handleComputeAverage(basicMode.contextMenuState?.targetDeviceId || null);
-                  }}
-                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
-                >
-                  计算平均值
-                </button>
+              
                 <button
                   onClick={() => {
                     if (basicMode.contextMenuState?.targetDeviceId) {
@@ -693,6 +728,16 @@ const CurveChartPanel = ({
                   平均复制到
                 </button>
                 <div className="border-t border-gray-100" />
+                                <button
+                  onClick={() => {
+                    basicMode.setContextMenuState(null);
+                    basicMode.handleComputeAverage(basicMode.contextMenuState?.targetDeviceId || null);
+                  }}
+                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                >
+                  计算平均值
+                </button>
+                <div className="border-t border-gray-100" />
                 <button
                   onClick={() => {
                     basicMode.setContextMenuState(null);
@@ -705,39 +750,7 @@ const CurveChartPanel = ({
               </>
             )}
             
-            {/* 如果有复制数据，显示粘贴选项 */}
-            {basicMode.copiedData && (
-              <>
-                {basicMode.selectionRange && <div className="border-t border-gray-100" />}
-                <button
-                  onClick={() => {
-                    basicMode.handlePaste(basicMode.contextMenuState?.targetDeviceId || null, basicMode.contextMenuState?.targetTimestamp || 0);
-                  }}
-                  className={`w-full text-left px-4 py-2 text-sm ${
-                    (basicMode.copiedData.copiedDeviceId !== null && !basicMode.contextMenuState.targetDeviceId) ||
-                    (basicMode.copiedData.copiedDeviceId === null && basicMode.contextMenuState.targetDeviceId !== null)
-                      ? 'text-gray-400 cursor-not-allowed bg-gray-50'
-                      : 'text-gray-700 hover:bg-gray-100'
-                  }`}
-                  disabled={
-                    // 如果复制时选择了设备，必须选择设备才能粘贴
-                    // 如果复制时没有选择设备，只能在空白处粘贴
-                    (basicMode.copiedData.copiedDeviceId !== null && !basicMode.contextMenuState.targetDeviceId) ||
-                    (basicMode.copiedData.copiedDeviceId === null && basicMode.contextMenuState.targetDeviceId !== null)
-                  }
-                >
-                  粘贴
-                  {basicMode.copiedData.copiedDeviceId && (
-                    <span className="ml-2 text-xs text-gray-500">
-                      ({basicMode.copiedData.copiedDeviceId})
-                    </span>
-                  )}
-                  {basicMode.copiedData.copiedDeviceId === null && (
-                    <span className="ml-2 text-xs text-gray-500">(多设备)</span>
-                  )}
-                </button>
-              </>
-            )}
+           
           </div>
         </div>
       ) : null}

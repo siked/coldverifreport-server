@@ -300,7 +300,7 @@ export default function TaskDataPage() {
   const [selectionPreviewMode, setSelectionPreviewMode] = useState<'add' | 'remove' | null>(null);
   const [data, setData] = useState<TemperatureHumidityData[]>([]);
   const [visibleRowCount, setVisibleRowCount] = useState(LIST_BATCH_SIZE);
-  const [activeTab, setActiveTab] = useState<'list' | 'chart'>('list');
+  const [activeTab, setActiveTab] = useState<'list' | 'chart'>('chart');
   const [chartDataType, setChartDataType] = useState<'temperature' | 'humidity'>('temperature');
   const [chartMode, setChartMode] = useState<ChartMode>('basic');
   const [showAddForm, setShowAddForm] = useState(false);
@@ -3801,17 +3801,6 @@ const collectSelectionData = useCallback(
                   <div className="flex items-center justify-between">
                     <div className="flex items-center space-x-4">
                       <button
-                        onClick={() => setActiveTab('list')}
-                        className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
-                          activeTab === 'list'
-                            ? 'bg-primary-100 text-primary-700'
-                            : 'text-gray-600 hover:text-gray-900'
-                        }`}
-                      >
-                        <Table className="w-4 h-4" />
-                        数据表格
-                      </button>
-                      <button
                         onClick={() => setActiveTab('chart')}
                         className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
                           activeTab === 'chart'
@@ -3821,6 +3810,17 @@ const collectSelectionData = useCallback(
                       >
                         <LineChart className="w-4 h-4" />
                         曲线图
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('list')}
+                        className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                          activeTab === 'list'
+                            ? 'bg-primary-100 text-primary-700'
+                            : 'text-gray-600 hover:text-gray-900'
+                        }`}
+                      >
+                        <Table className="w-4 h-4" />
+                        数据表格
                       </button>
                       {activeTab === 'chart' && (
                         <div className="flex items-center gap-2 pl-4 border-l border-gray-200">
