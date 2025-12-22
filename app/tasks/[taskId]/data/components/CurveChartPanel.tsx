@@ -12,7 +12,7 @@ import {
 import Highcharts from 'highcharts/highstock';
 import HighchartsReact, { HighchartsReactRefObject } from 'highcharts-react-official';
 
-import type { TemperatureHumidityData, ChartPoint } from '../types';
+import type { TemperatureHumidityData, ChartPoint, Device } from '../types';
 import type { AlertState, ChartMode } from './modes/types';
 import { saveToCache } from '@/lib/cache';
 import { useBasicMode } from './modes/hooks/useBasicMode';
@@ -26,10 +26,12 @@ interface CurveChartPanelProps {
   deviceDataMap: Record<string, TemperatureHumidityData[]>;
   activeTab: 'temperature' | 'humidity';
   taskId: string;
+  devices: Device[];
   setAlert: Dispatch<SetStateAction<AlertState>>;
   applyDeviceDataUpdate: (deviceId: string, dataset: TemperatureHumidityData[]) => void;
   updateCacheStats: () => Promise<void>;
   fetchDevices: () => Promise<void>;
+  mode: ChartMode;
 }
 
 const CHART_COLOR_PALETTE = ['#3b82f6', '#10b981', '#f97316', '#a855f7', '#ec4899', '#0ea5e9'];
@@ -41,16 +43,22 @@ const CurveChartPanel = ({
   deviceDataMap,
   activeTab,
   taskId,
+  devices,
   setAlert,
   applyDeviceDataUpdate,
   updateCacheStats,
   fetchDevices,
+  mode,
 }: CurveChartPanelProps) => {
-  const [mode, setMode] = useState<ChartMode>('basic');
   const [chartRange, setChartRange] = useState<{ min: number; max: number } | null>(null);
   const chartComponentRef = useRef<HighchartsReactRefObject | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const saveHistoryRef = useRef<(() => void) | null>(null);
+  const [isAverageCopyDialogOpen, setIsAverageCopyDialogOpen] = useState(false);
+  const [averageCopyDeviceId, setAverageCopyDeviceId] = useState('');
+  const [averageCopySearch, setAverageCopySearch] = useState('');
+  const [averageCopyError, setAverageCopyError] = useState<string | null>(null);
+  const [isAverageCopyProcessing, setIsAverageCopyProcessing] = useState(false);
 
   // 撤销功能
   const undoRedo = useUndoRedo({
@@ -425,7 +433,7 @@ const CurveChartPanel = ({
         type: 'spline',
         backgroundColor: 'transparent',
         height: null,
-        spacing: [8, 12, 8, 12],
+        spacing: [2, 2, 2, 2],
         zooming:
           mode === 'basic'
             ? {
@@ -448,7 +456,7 @@ const CurveChartPanel = ({
       },
       time: {
         useUTC: false,
-      },
+      } as Highcharts.TimeOptions,
       title: { text: undefined },
       xAxis: {
         type: 'datetime',
@@ -530,64 +538,8 @@ const CurveChartPanel = ({
   }, [activeTab, chartSeriesData, handleAfterSetExtremes, basicMode.handleChartSelection, mode, dragMode.selectedDeviceId, dataTimeRange]);
 
   return (
-    <div className="flex-1 p-6 flex flex-col overflow-hidden">
-      <div className="bg-white rounded-lg shadow flex-1 flex flex-col min-h-[400px]">
-        {/* 模式切换区域 - 始终显示在顶部 */}
-        <div className="px-4 py-3 border-b-2 border-blue-300 bg-blue-50" style={{ minHeight: '60px', zIndex: 10 }}>
-          <div className="flex items-center gap-6 flex-wrap">
-            <div className="flex items-center gap-3">
-              <span className="text-base font-bold text-gray-900" id="mode-label">模式：</span>
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-blue-100 px-3 py-1.5 rounded-md transition border border-blue-200">
-                <input
-                  type="radio"
-                  name="chart-mode"
-                  checked={mode === 'basic'}
-                  onChange={() => setMode('basic')}
-                  className="w-4 h-4 text-blue-600 cursor-pointer"
-                />
-                <span className="text-sm font-medium text-gray-800 select-none">基础</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-blue-100 px-3 py-1.5 rounded-md transition border border-blue-200">
-                <input
-                  type="radio"
-                  name="chart-mode"
-                  checked={mode === 'drag'}
-                  onChange={() => setMode('drag')}
-                  className="w-4 h-4 text-blue-600 cursor-pointer"
-                />
-                <span className="text-sm font-medium text-gray-800 select-none" id="drag-mode-label">拖拽</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-blue-100 px-3 py-1.5 rounded-md transition border border-blue-200">
-                <input
-                  type="radio"
-                  name="chart-mode"
-                  checked={mode === 'magicPen'}
-                  onChange={() => setMode('magicPen')}
-                  className="w-4 h-4 text-blue-600 cursor-pointer"
-                />
-                <span className="text-sm font-medium text-gray-800 select-none">魔术笔</span>
-              </label>
-            </div>
-            {mode === 'drag' && (
-              <div className="text-sm text-gray-700 border-l-2 border-blue-500 pl-4 font-medium">
-                {dragMode.selectedDeviceId ? (
-                  <span>
-                    单条曲线编辑模式：<span className="font-bold text-blue-600">{dragMode.selectedDeviceId}</span>{' '}
-                    <span className="text-gray-500">(点击曲线选择)</span>
-                  </span>
-                ) : (
-                  <span>全部曲线编辑模式：所有曲线可拖拽</span>
-                )}
-              </div>
-            )}
-            {mode === 'magicPen' && (
-              <div className="text-sm text-gray-700 border-l-2 border-blue-500 pl-4 font-medium">
-                <span>按住鼠标左键拖动绘制数据轨迹，单条曲线直接绘制，多条曲线保持相对偏移</span>
-              </div>
-            )}
-          </div>
-        </div>
-        
+    <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col min-h-[400px]">
         {!hasChartData ? (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center text-gray-500">
@@ -597,7 +549,7 @@ const CurveChartPanel = ({
           </div>
         ) : (
           <>
-            <div className="flex-1 w-full h-full p-4 relative">
+            <div className="flex-1 w-full h-full relative">
               <HighchartsReact
                 highcharts={Highcharts}
                 constructorType="stockChart"
@@ -621,7 +573,7 @@ const CurveChartPanel = ({
               )}
             </div>
             {mode === 'basic' && basicMode.selectionRange && (
-              <div className="px-4 pb-4">
+              <div className="px-2 pb-2">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-xs text-gray-500">
                     最近框选时间：
@@ -645,6 +597,18 @@ const CurveChartPanel = ({
                       className="px-3 py-1 rounded border border-amber-200 text-amber-600 hover:bg-amber-50"
                     >
                       计算平均值
+                    </button>
+                    <button
+                      onClick={() => {
+                        basicMode.setContextMenuState(null);
+                        setAverageCopyDeviceId('');
+                        setAverageCopySearch('');
+                        setAverageCopyError(null);
+                        setIsAverageCopyDialogOpen(true);
+                      }}
+                      className="px-3 py-1 rounded border border-indigo-200 text-indigo-600 hover:bg-indigo-50"
+                    >
+                      平均复制到
                     </button>
                     <button
                       onClick={basicMode.handleClearSelection}
@@ -708,6 +672,26 @@ const CurveChartPanel = ({
                 >
                   计算平均值
                 </button>
+                <button
+                  onClick={() => {
+                    if (basicMode.contextMenuState?.targetDeviceId) {
+                      return;
+                    }
+                    basicMode.setContextMenuState(null);
+                    setAverageCopyDeviceId('');
+                    setAverageCopySearch('');
+                    setAverageCopyError(null);
+                    setIsAverageCopyDialogOpen(true);
+                  }}
+                  disabled={Boolean(basicMode.contextMenuState?.targetDeviceId)}
+                  className={`w-full text-left px-4 py-2 text-sm ${
+                    basicMode.contextMenuState?.targetDeviceId
+                      ? 'text-gray-400 cursor-not-allowed bg-gray-50'
+                      : 'text-gray-700 hover:bg-gray-100'
+                  }`}
+                >
+                  平均复制到
+                </button>
                 <div className="border-t border-gray-100" />
                 <button
                   onClick={() => {
@@ -757,6 +741,293 @@ const CurveChartPanel = ({
           </div>
         </div>
       ) : null}
+
+      {/* 平均复制到 弹窗 */}
+      {mode === 'basic' && isAverageCopyDialogOpen && basicMode.selectionRange && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-sm mx-4">
+            <div className="p-6 space-y-4">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-800">平均复制到设备</h3>
+                <p className="mt-1 text-xs text-gray-500">
+                  将当前框选时间范围内所有已渲染设备的
+                  {activeTab === 'temperature' ? '温度' : '湿度'}
+                  平均值，复制到目标设备在该时间段内的曲线中。
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  设备ID
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={averageCopyDeviceId}
+                    onChange={(e) => {
+                      setAverageCopyDeviceId(e.target.value);
+                      setAverageCopySearch(e.target.value);
+                      setAverageCopyError(null);
+                    }}
+                    placeholder="输入或搜索设备ID"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 text-sm"
+                  />
+                  {/* 简单下拉搜索（基于设备列表） */}
+                  {averageCopySearch.trim() && (
+                    <div className="absolute z-50 mt-1 w-full max-h-48 overflow-auto rounded-md border border-gray-200 bg-white shadow-lg text-sm">
+                      {devices
+                        .map((d) => d.deviceId)
+                        .filter((id) =>
+                          id.toLowerCase().includes(averageCopySearch.trim().toLowerCase())
+                        )
+                        .map((id) => (
+                          <button
+                            key={id}
+                            type="button"
+                            onMouseDown={(e) => {
+                              e.preventDefault();
+                              setAverageCopyDeviceId(id);
+                              setAverageCopySearch(id);
+                              setAverageCopyError(null);
+                            }}
+                            className="w-full text-left px-3 py-1.5 hover:bg-blue-50"
+                          >
+                            {id}
+                          </button>
+                        ))}
+                      {devices
+                        .map((d) => d.deviceId)
+                        .filter((id) =>
+                          id.toLowerCase().includes(averageCopySearch.trim().toLowerCase())
+                        ).length === 0 && (
+                        <div className="px-3 py-1.5 text-xs text-gray-400">
+                          未找到匹配的设备
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {averageCopyError && (
+                  <p className="mt-1 text-xs text-red-600">{averageCopyError}</p>
+                )}
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isAverageCopyProcessing) return;
+                    setIsAverageCopyDialogOpen(false);
+                    setAverageCopyDeviceId('');
+                    setAverageCopySearch('');
+                    setAverageCopyError(null);
+                  }}
+                  className="px-4 py-2 text-sm rounded border border-gray-200 text-gray-600 hover:bg-gray-50 disabled:opacity-60"
+                  disabled={isAverageCopyProcessing}
+                >
+                  取消
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (isAverageCopyProcessing) return;
+                    const targetId = averageCopyDeviceId.trim();
+                    if (!targetId) {
+                      setAverageCopyError('请输入设备ID');
+                      return;
+                    }
+                    // 目标设备必须存在于设备列表中
+                    if (!devices.some((d) => d.deviceId === targetId)) {
+                      setAverageCopyError('设备列表中不存在该设备ID');
+                      return;
+                    }
+                    if (!basicMode.selectionRange) {
+                      setAlert({
+                        isOpen: true,
+                        message: '请先框选时间范围',
+                        type: 'info',
+                      });
+                      return;
+                    }
+
+                    const { start, end } = basicMode.selectionRange;
+                    // 收集选区内所有设备的数据
+                    const selectedData: TemperatureHumidityData[] = renderDeviceIds.flatMap(
+                      (deviceId) => {
+                        const dataset = deviceDataMap[deviceId] || [];
+                        return dataset.filter((item) => {
+                          const ts = new Date(item.timestamp).getTime();
+                          return ts >= start && ts <= end;
+                        });
+                      }
+                    );
+
+                    if (selectedData.length < 2) {
+                      setAlert({
+                        isOpen: true,
+                        message: '选中范围内有效数据不足 2 条，无法计算平均值',
+                        type: 'warning',
+                      });
+                      return;
+                    }
+
+                    // 按时间（分钟粒度）聚合平均值：每个时间点一个平均值，保持时间轴形状
+                    const roundToOne = (v: number) => Math.round(v * 10) / 10;
+                    const BUCKET_MS = 60_000; // 1 分钟
+                    const buckets = new Map<
+                      number,
+                      {
+                        tempSum: number;
+                        humSum: number;
+                        tempCount: number;
+                        humCount: number;
+                      }
+                    >();
+
+                    selectedData.forEach((item) => {
+                      const ts = new Date(item.timestamp).getTime();
+                      const bucketKey = Math.floor(ts / BUCKET_MS) * BUCKET_MS;
+                      const bucket = buckets.get(bucketKey) || {
+                        tempSum: 0,
+                        humSum: 0,
+                        tempCount: 0,
+                        humCount: 0,
+                      };
+                      if (Number.isFinite(item.temperature)) {
+                        bucket.tempSum += item.temperature;
+                        bucket.tempCount += 1;
+                      }
+                      if (Number.isFinite(item.humidity)) {
+                        bucket.humSum += item.humidity;
+                        bucket.humCount += 1;
+                      }
+                      buckets.set(bucketKey, bucket);
+                    });
+
+                    const bucketEntries = Array.from(buckets.entries())
+                      .filter(([, bucket]) =>
+                        activeTab === 'temperature'
+                          ? bucket.tempCount > 0
+                          : bucket.humCount > 0
+                      )
+                      .sort((a, b) => a[0] - b[0]);
+
+                    if (bucketEntries.length === 0) {
+                      setAlert({
+                        isOpen: true,
+                        message: '选中范围内没有有效数据，无法计算平均值',
+                        type: 'warning',
+                      });
+                      return;
+                    }
+
+                    const targetDataset = deviceDataMap[targetId] || [];
+
+                    // 先移除目标设备在选中时间范围内的旧数据，再按时间桶写入平均值点
+                    const filteredExisting = targetDataset.filter((item) => {
+                      const ts = new Date(item.timestamp).getTime();
+                      return ts < start || ts > end;
+                    });
+
+                    const averagedPoints: TemperatureHumidityData[] = bucketEntries.map(
+                      ([bucketTs, bucket]) => {
+                        const avgTemp =
+                          bucket.tempCount > 0
+                            ? roundToOne(bucket.tempSum / bucket.tempCount)
+                            : 0;
+                        const avgHum =
+                          bucket.humCount > 0
+                            ? roundToOne(bucket.humSum / bucket.humCount)
+                            : 0;
+
+                        return {
+                          taskId,
+                          deviceId: targetId,
+                          temperature:
+                            activeTab === 'temperature' ? avgTemp : avgTemp,
+                          humidity:
+                            activeTab === 'humidity' ? avgHum : avgHum,
+                          timestamp: new Date(bucketTs).toISOString(),
+                        };
+                      }
+                    );
+
+                    const updatedDataset: TemperatureHumidityData[] = [
+                      ...filteredExisting,
+                      ...averagedPoints,
+                    ];
+
+                    // 计算用于提示文案的整体平均值（基于聚合结果）
+                    let displayAvgValue = 0;
+                    if (activeTab === 'temperature') {
+                      let sum = 0;
+                      let count = 0;
+                      bucketEntries.forEach(([, bucket]) => {
+                        if (bucket.tempCount > 0) {
+                          sum += bucket.tempSum / bucket.tempCount;
+                          count += 1;
+                        }
+                      });
+                      if (count > 0) {
+                        displayAvgValue = roundToOne(sum / count);
+                      }
+                    } else {
+                      let sum = 0;
+                      let count = 0;
+                      bucketEntries.forEach(([, bucket]) => {
+                        if (bucket.humCount > 0) {
+                          sum += bucket.humSum / bucket.humCount;
+                          count += 1;
+                        }
+                      });
+                      if (count > 0) {
+                        displayAvgValue = roundToOne(sum / count);
+                      }
+                    }
+
+                    try {
+                      setIsAverageCopyProcessing(true);
+                      // 排序后写入缓存并更新父组件
+                      updatedDataset.sort(
+                        (a, b) =>
+                          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+                      );
+                      await saveToCache(taskId, targetId, updatedDataset);
+                      applyDeviceDataUpdate(targetId, updatedDataset);
+                      await updateCacheStats();
+
+                      setAlert({
+                        isOpen: true,
+                        message:
+                          activeTab === 'temperature'
+                            ? `已将平均温度 ${displayAvgValue.toFixed(1)}°C 复制到设备 ${targetId} 的选中时间段`
+                            : `已将平均湿度 ${displayAvgValue.toFixed(1)}% 复制到设备 ${targetId} 的选中时间段`,
+                        type: 'success',
+                      });
+                      setIsAverageCopyDialogOpen(false);
+                      setAverageCopyDeviceId('');
+                      setAverageCopySearch('');
+                      setAverageCopyError(null);
+                      basicMode.setSelectionRange(null);
+                    } catch (error) {
+                      console.error('平均复制到 失败:', error);
+                      setAlert({
+                        isOpen: true,
+                        message: '平均复制失败，请重试',
+                        type: 'error',
+                      });
+                    } finally {
+                      setIsAverageCopyProcessing(false);
+                    }
+                  }}
+                  className="px-4 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed"
+                  disabled={isAverageCopyProcessing}
+                >
+                  {isAverageCopyProcessing ? '处理中…' : '确定复制'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

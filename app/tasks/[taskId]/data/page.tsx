@@ -9,12 +9,14 @@ import {
   type MouseEvent as ReactMouseEvent,
   type UIEvent,
 } from 'react';
+import { flushSync } from 'react-dom';
 import { useParams, useRouter } from 'next/navigation';
 import Layout from '@/components/Layout';
 import Alert from '@/components/Alert';
 import CurveChartPanel from './components/CurveChartPanel';
 import TrendGenerator from './components/TrendGenerator';
-import { ArrowLeft, Plus, Trash2, Edit2, Upload, Save, Trash, Database, Loader2, FileText } from 'lucide-react';
+import type { ChartMode } from './components/modes/types';
+import { ArrowLeft, Plus, Trash2, Edit2, Upload, Save, Trash, Database, Loader2, FileText, Thermometer, Droplet, Table, LineChart } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useTaskDataLayer } from './hooks/useTaskDataLayer';
 import {
@@ -298,7 +300,9 @@ export default function TaskDataPage() {
   const [selectionPreviewMode, setSelectionPreviewMode] = useState<'add' | 'remove' | null>(null);
   const [data, setData] = useState<TemperatureHumidityData[]>([]);
   const [visibleRowCount, setVisibleRowCount] = useState(LIST_BATCH_SIZE);
-  const [activeTab, setActiveTab] = useState<'list' | 'temperature' | 'humidity'>('list');
+  const [activeTab, setActiveTab] = useState<'list' | 'chart'>('list');
+  const [chartDataType, setChartDataType] = useState<'temperature' | 'humidity'>('temperature');
+  const [chartMode, setChartMode] = useState<ChartMode>('basic');
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingData, setEditingData] = useState<TemperatureHumidityData | null>(null);
   const [formData, setFormData] = useState({
@@ -339,6 +343,7 @@ export default function TaskDataPage() {
     humidity: '',
     timestamp: '',
   });
+  const [removeSeconds, setRemoveSeconds] = useState(true); // 默认去掉秒数
   const [uploadProgress, setUploadProgress] = useState<{
     isUploading: boolean;
     progress: number;
@@ -670,17 +675,38 @@ export default function TaskDataPage() {
         display: block !important;
         margin-bottom: 2px !important;
         padding-bottom: 2px !important;
+        visibility: visible !important;
+        opacity: 1 !important;
       }
       .handsontable-container .ht_clone_bottom .wtHolder {
         overflow-x: scroll !important;
         overflow-y: hidden !important;
         display: block !important;
-        height: auto !important;
+        height: 20px !important;
+        min-height: 20px !important;
         max-height: 20px !important;
         margin-bottom: 2px !important;
+        visibility: visible !important;
+        opacity: 1 !important;
       }
       .handsontable-container .ht_clone_bottom .wtHolder table {
         margin-bottom: 2px !important;
+      }
+      .handsontable-container {
+        height: 100% !important;
+        position: relative !important;
+      }
+      .handsontable-container .ht_clone_bottom {
+        display: block !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+        height: 20px !important;
+        min-height: 20px !important;
+        max-height: 20px !important;
+        position: relative !important;
+        z-index: 10 !important;
+        margin-top: 0 !important;
+        padding-top: 0 !important;
       }
       .handsontable-container table {
         margin-bottom: 2px !important;
@@ -978,7 +1004,7 @@ export default function TaskDataPage() {
       window.removeEventListener('mousemove', handleMouseMove as EventListener);
       window.removeEventListener('mouseup', handleMouseUp as EventListener);
     };
-  }, [renderDeviceIds, activeTab, copiedSelectionData, selectionRange]);
+  }, [renderDeviceIds, chartDataType, copiedSelectionData, selectionRange]);
 
   useEffect(() => {
     if (!selectedDeviceId) return;
@@ -1978,6 +2004,7 @@ export default function TaskDataPage() {
         type: 'text',
         width: 150,
         editor: DateTimeTextEditor,
+        wordWrap: false,
         className: 'htCenter htMiddle',
         renderer: function(instance: any, td: HTMLElement, row: number, col: number, prop: string | number, value: any, cellProperties: any) {
           if (value instanceof Date) {
@@ -2020,6 +2047,7 @@ export default function TaskDataPage() {
         width: 40,
         minWidth: 40,
         maxWidth: 40,
+        wordWrap: false,
         className: 'htCenter htMiddle',
       });
     });
@@ -2165,16 +2193,22 @@ export default function TaskDataPage() {
   };
 
   // 解析时间字符串，自适应多种格式
-  const parseTimestamp = (value: any): Date | null => {
+  const parseTimestamp = (value: any, removeSeconds: boolean = false): Date | null => {
     if (!value) return null;
     
     // 如果是 Date 对象
     if (value instanceof Date) {
-      return value;
+      const date = new Date(value);
+      if (removeSeconds) {
+        // 去掉秒数和毫秒
+        date.setSeconds(0, 0);
+      }
+      return date;
     }
     
     // 如果是数字（可能是 Excel 日期序列号或时间戳）
     if (typeof value === 'number') {
+      let date: Date | null = null;
       // Excel 日期序列号（1900年1月1日为1），支持带小数的时间部分
       // 例如：45777.6548611111 表示 2025-04-15 15:43:00
       if (value > 1 && value < 1000000) {
@@ -2185,14 +2219,18 @@ export default function TaskDataPage() {
         const days = Math.floor(value);
         const timeFraction = value - days;
         const milliseconds = days * 24 * 60 * 60 * 1000 + timeFraction * 24 * 60 * 60 * 1000;
-        return new Date(excelEpoch.getTime() + milliseconds);
+        date = new Date(excelEpoch.getTime() + milliseconds);
+      } else if (value < 10000000000) {
+        // Unix 时间戳（秒）
+        date = new Date(value * 1000);
+      } else {
+        // Unix 时间戳（毫秒）
+        date = new Date(value);
       }
-      // Unix 时间戳（秒）
-      if (value < 10000000000) {
-        return new Date(value * 1000);
+      if (date && removeSeconds) {
+        date.setSeconds(0, 0);
       }
-      // Unix 时间戳（毫秒）
-      return new Date(value);
+      return date;
     }
     
     // 如果是字符串，可能是数字字符串（Excel日期序列号）
@@ -2207,7 +2245,20 @@ export default function TaskDataPage() {
       const days = Math.floor(numValue);
       const timeFraction = numValue - days;
       const milliseconds = days * 24 * 60 * 60 * 1000 + timeFraction * 24 * 60 * 60 * 1000;
-      return new Date(excelEpoch.getTime() + milliseconds);
+      const date = new Date(excelEpoch.getTime() + milliseconds);
+      if (removeSeconds) {
+        date.setSeconds(0, 0);
+      }
+      return date;
+    }
+    
+    // 如果要去掉秒数，先处理字符串格式（去掉秒数部分）
+    let processedStr = str;
+    if (removeSeconds) {
+      // 匹配带秒数的时间格式，去掉秒数部分
+      processedStr = str.replace(/(\d{4}[-\/]\d{1,2}[-\/]\d{1,2}\s+\d{1,2}:\d{1,2}):\d{1,2}(\.\d+)?/g, '$1');
+      // 处理 ISO 格式
+      processedStr = processedStr.replace(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}):\d{2}(\.\d+)?/g, '$1');
     }
     
     // 尝试多种日期格式
@@ -2215,22 +2266,31 @@ export default function TaskDataPage() {
       /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}$/, // 2024-01-01 12:00:00
       /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/, // ISO 格式
       /^\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}:\d{2}$/, // 2024/01/01 12:00:00
+      /^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}$/, // 2024-01-01 12:00 (无秒)
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/, // ISO 格式 (无秒)
+      /^\d{4}\/\d{2}\/\d{2}\s+\d{2}:\d{2}$/, // 2024/01/01 12:00 (无秒)
       /^\d{4}-\d{2}-\d{2}$/, // 2024-01-01
       /^\d{4}\/\d{2}\/\d{2}$/, // 2024/01/01
     ];
     
     for (const format of formats) {
-      if (format.test(str)) {
-        const date = new Date(str);
+      if (format.test(processedStr)) {
+        const date = new Date(processedStr);
         if (!isNaN(date.getTime())) {
+          if (removeSeconds) {
+            date.setSeconds(0, 0);
+          }
           return date;
         }
       }
     }
     
     // 最后尝试直接解析
-    const date = new Date(str);
+    const date = new Date(processedStr);
     if (!isNaN(date.getTime())) {
+      if (removeSeconds) {
+        date.setSeconds(0, 0);
+      }
       return date;
     }
     
@@ -2377,8 +2437,8 @@ export default function TaskDataPage() {
         const temperatureRounded = Math.round(temperature * 10) / 10;
         const humidityRounded = Math.round(humidity * 10) / 10;
 
-        // 解析时间
-        const timestamp = parseTimestamp(timestampValue);
+        // 解析时间（根据选项决定是否去掉秒数）
+        const timestamp = parseTimestamp(timestampValue, removeSeconds);
         if (!timestamp) {
           continue; // 跳过无效时间
         }
@@ -2431,12 +2491,9 @@ export default function TaskDataPage() {
         const deviceCountToWrite = grouped.size;
 
         const yieldToUI = async () => {
+          // 使用 setTimeout 给浏览器更多时间更新 UI
           await new Promise((resolve) => {
-            if (typeof requestAnimationFrame === 'function') {
-              requestAnimationFrame(() => resolve(null));
-            } else {
-              setTimeout(() => resolve(null), 0);
-            }
+            setTimeout(() => resolve(null), 10);
           });
         };
 
@@ -2455,31 +2512,91 @@ export default function TaskDataPage() {
         let processedDevices = 0;
         let processedRows = 0;
 
-        for (const [deviceId, deviceRows] of grouped.entries()) {
+        // 强制同步更新进度的辅助函数
+        const updateProgressSync = (stage: string, processed: number, total: number) => {
+          flushSync(() => {
+            setImportProgress({
+              stage,
+              processed,
+              total,
+            });
+          });
+        };
+
+        // 将设备列表转换为数组，以便逐个处理
+        const deviceEntries = Array.from(grouped.entries());
+        
+        // 逐个处理设备，每个设备处理完后让出控制权
+        for (let i = 0; i < deviceEntries.length; i++) {
+          const [deviceId, deviceRows] = deviceEntries[i];
           const t0 = performance.now();
           logImportStep('write device start', {
             deviceId,
             newRows: deviceRows.length,
           });
 
+          // 在开始处理前更新进度，显示正在处理的设备和预估进度
+          // 使用已处理的行数 + 当前设备的部分行数作为预估进度
+          const estimatedProgress = processedRows + Math.floor(deviceRows.length * 0.1);
+          updateProgressSync(`写入缓存… (${deviceId})`, estimatedProgress, totalRowsToWrite);
+          // 强制让出控制权，确保 UI 更新
+          await new Promise(resolve => setTimeout(resolve, 50));
+
           try {
             // 读取已缓存数据并合并
+            updateProgressSync(`写入缓存… (${deviceId} - 读取中)`, processedRows, totalRowsToWrite);
+            // 使用双重 requestAnimationFrame 确保 UI 更新
+            await new Promise(resolve => {
+              requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                  setTimeout(resolve, 100);
+                });
+              });
+            });
+            
+            // 读取缓存数据
             const existingData = (await loadFromCache(taskId, deviceId)) || [];
+            
+            // 合并前更新一次进度
+            updateProgressSync(`写入缓存… (${deviceId} - 合并中)`, processedRows, totalRowsToWrite);
+            await new Promise(resolve => {
+              requestAnimationFrame(() => {
+                setTimeout(resolve, 50);
+              });
+            });
+            
+            // 合并并排序数据
             const merged = [...existingData, ...deviceRows].sort(
               (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
             );
 
+            // 保存前更新一次进度，使用 flushSync 强制同步更新
+            updateProgressSync(`写入缓存… (${deviceId} - 保存中)`, processedRows, totalRowsToWrite);
+            // 使用双重 requestAnimationFrame 确保 UI 完全更新
+            await new Promise(resolve => {
+              requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                  setTimeout(resolve, 100);
+                });
+              });
+            });
+
+            // 直接调用 saveToCache
             await saveToCache(taskId, deviceId, merged, true);
 
             const t1 = performance.now();
             processedDevices += 1;
             processedRows += deviceRows.length;
 
-            setImportProgress({
-              stage: '写入缓存…',
-              processed: processedRows,
-              total: totalRowsToWrite,
+            // 保存后立即更新进度，使用 flushSync 强制同步更新
+            updateProgressSync('写入缓存…', processedRows, totalRowsToWrite);
+            // 强制让出控制权，确保进度条更新
+            await new Promise(resolve => {
+              requestAnimationFrame(() => {
+                setTimeout(resolve, 50);
+              });
             });
+            
             logImportStep('write device done', {
               deviceId,
               newRows: deviceRows.length,
@@ -2503,14 +2620,13 @@ export default function TaskDataPage() {
               message: `设备 ${deviceId} 写入缓存失败：${(error as any)?.message || '未知错误'}`,
               type: 'warning',
             });
-            setImportProgress({
-              stage: '写入缓存…',
-              processed: processedRows,
-              total: totalRowsToWrite,
+            updateProgressSync('写入缓存…', processedRows, totalRowsToWrite);
+            await new Promise(resolve => {
+              requestAnimationFrame(() => {
+                setTimeout(resolve, 50);
+              });
             });
           }
-
-          await yieldToUI();
         }
 
         logImportStep('write cache done');
@@ -2958,10 +3074,10 @@ export default function TaskDataPage() {
         points: aggregateSeriesPoints(
           series.points,
           chartRange,
-          activeTab === 'temperature' ? 'temperature' : 'humidity'
+          chartDataType
         ),
       })),
-    [rawChartSeriesData, aggregateSeriesPoints, chartRange, activeTab]
+    [rawChartSeriesData, aggregateSeriesPoints, chartRange, chartDataType]
   );
 
   const hasChartData = chartSeriesData.some((series) => series.points.length > 0);
@@ -3213,7 +3329,7 @@ const collectSelectionData = useCallback(
   );
 
   const highchartsOptions = useMemo<Highcharts.Options>(() => {
-    const isTemperature = activeTab === 'temperature';
+    const isTemperature = chartDataType === 'temperature';
     const valueKey: 'temperature' | 'humidity' = isTemperature ? 'temperature' : 'humidity';
     const valueSuffix = isTemperature ? ' °C' : ' %';
     const axisLabel = isTemperature ? '温度 (°C)' : '湿度 (%)';
@@ -3286,7 +3402,7 @@ const collectSelectionData = useCallback(
         enabled: false,
       },
     };
-  }, [activeTab, chartSeriesData, renderDeviceIds, handleAfterSetExtremes, handleChartSelection]);
+  }, [chartDataType, chartSeriesData, renderDeviceIds, handleAfterSetExtremes, handleChartSelection]);
 
   useEffect(() => {
     if (task?.taskName) {
@@ -3300,7 +3416,7 @@ const collectSelectionData = useCallback(
     <Layout>
       <div className="h-[calc(100vh-4rem)] flex flex-col">
         {/* 头部 */}
-        <div className="bg-white border-b px-6 py-4">
+        <div className="bg-white border-b px-6 py-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
               <button
@@ -3680,85 +3796,137 @@ const collectSelectionData = useCallback(
               </div>
             ) : (
               <>
-                {/* TAB切换：数据列表、温度、湿度 */}
-                <div className="bg-white border-b px-6 py-3">
-                  <div className="flex space-x-4">
-                    <button
-                      onClick={() => setActiveTab('list')}
-                      className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                        activeTab === 'list'
-                          ? 'bg-primary-100 text-primary-700'
-                          : 'text-gray-600 hover:text-gray-900'
-                      }`}
-                    >
-                      数据列表
-                    </button>
-                    <button
-                      onClick={() => setActiveTab('temperature')}
-                      className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                        activeTab === 'temperature'
-                          ? 'bg-primary-100 text-primary-700'
-                          : 'text-gray-600 hover:text-gray-900'
-                      }`}
-                    >
-                      温度
-                    </button>
-                    <button
-                      onClick={() => setActiveTab('humidity')}
-                      className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-                        activeTab === 'humidity'
-                          ? 'bg-primary-100 text-primary-700'
-                          : 'text-gray-600 hover:text-gray-900'
-                      }`}
-                    >
-                      湿度
-                    </button>
-                  </div>
-                </div>
-                {/* 内容区域 */}
-                <div className="flex-1 flex flex-col overflow-hidden">
-                  {activeTab === 'list' ? (
-                    /* 数据列表 - Handsontable */
-                    <div className="h-full flex flex-col bg-white">
-                      <div className="px-6 py-3 border-b flex items-center justify-between">
-                        <h3 className="font-semibold text-gray-800 flex items-center gap-2">
-                          数据列表
-                          <span className="text-xs font-normal text-gray-400">
-                            (Ctrl+C 复制 / Ctrl+V 粘贴)
-                          </span>
-                        </h3>
-                        <div className="flex items-center gap-4">
-                          <div className="flex items-center gap-2">
+                {/* TAB切换：数据表格、曲线图 */}
+                <div className="bg-white border-b px-6 py-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-4">
+                      <button
+                        onClick={() => setActiveTab('list')}
+                        className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                          activeTab === 'list'
+                            ? 'bg-primary-100 text-primary-700'
+                            : 'text-gray-600 hover:text-gray-900'
+                        }`}
+                      >
+                        <Table className="w-4 h-4" />
+                        数据表格
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('chart')}
+                        className={`px-4 py-2 rounded-md text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                          activeTab === 'chart'
+                            ? 'bg-primary-100 text-primary-700'
+                            : 'text-gray-600 hover:text-gray-900'
+                        }`}
+                      >
+                        <LineChart className="w-4 h-4" />
+                        曲线图
+                      </button>
+                      {activeTab === 'chart' && (
+                        <div className="flex items-center gap-2 pl-4 border-l border-gray-200">
+                          <span className="text-sm text-gray-600">模式：</span>
+                          <label className="flex items-center gap-2 cursor-pointer hover:bg-gray-100 px-3 py-1.5 rounded-md transition border border-gray-200">
+                            <input
+                              type="radio"
+                              name="chart-mode"
+                              checked={chartMode === 'basic'}
+                              onChange={() => setChartMode('basic')}
+                              className="w-4 h-4 text-primary-600 cursor-pointer"
+                            />
+                            <span className="text-sm font-medium text-gray-800 select-none">基础</span>
+                          </label>
+                          <label className="flex items-center gap-2 cursor-pointer hover:bg-gray-100 px-3 py-1.5 rounded-md transition border border-gray-200">
+                            <input
+                              type="radio"
+                              name="chart-mode"
+                              checked={chartMode === 'drag'}
+                              onChange={() => setChartMode('drag')}
+                              className="w-4 h-4 text-primary-600 cursor-pointer"
+                            />
+                            <span className="text-sm font-medium text-gray-800 select-none">拖拽</span>
+                          </label>
+                          <label className="flex items-center gap-2 cursor-pointer hover:bg-gray-100 px-3 py-1.5 rounded-md transition border border-gray-200">
+                            <input
+                              type="radio"
+                              name="chart-mode"
+                              checked={chartMode === 'magicPen'}
+                              onChange={() => setChartMode('magicPen')}
+                              className="w-4 h-4 text-primary-600 cursor-pointer"
+                            />
+                            <span className="text-sm font-medium text-gray-800 select-none">魔术笔</span>
+                          </label>
+                        </div>
+                      )}
+                      {isSaving && (
+                        <div className="flex items-center gap-2 text-sm text-gray-500">
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>保存中...</span>
+                        </div>
+                      )}
+                    </div>
+                    {(activeTab === 'list' || activeTab === 'chart') && (
+                      <div className="flex items-center gap-2 pl-4 border-l border-gray-200">
+                        {activeTab === 'list' ? (
+                          <>
                             <button
                               onClick={() => setTableDataType('temperature')}
-                              className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                              className={`px-3 py-1.5 rounded text-sm font-medium transition-colors flex items-center gap-1.5 ${
                                 tableDataType === 'temperature'
                                   ? 'bg-primary-600 text-white'
                                   : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                               }`}
                             >
+                              <Thermometer className="w-4 h-4" />
                               温度
                             </button>
                             <button
                               onClick={() => setTableDataType('humidity')}
-                              className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                              className={`px-3 py-1.5 rounded text-sm font-medium transition-colors flex items-center gap-1.5 ${
                                 tableDataType === 'humidity'
                                   ? 'bg-primary-600 text-white'
                                   : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                               }`}
                             >
+                              <Droplet className="w-4 h-4" />
                               湿度
                             </button>
-                          </div>
-                          {isSaving && (
-                            <div className="flex items-center gap-2 text-sm text-gray-500">
-                              <Loader2 className="w-4 h-4 animate-spin" />
-                              <span>保存中...</span>
-                            </div>
-                          )}
-                        </div>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => setChartDataType('temperature')}
+                              className={`px-3 py-1.5 rounded text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                                chartDataType === 'temperature'
+                                  ? 'bg-primary-600 text-white'
+                                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                              }`}
+                            >
+                              <Thermometer className="w-4 h-4" />
+                              温度
+                            </button>
+                            <button
+                              onClick={() => setChartDataType('humidity')}
+                              className={`px-3 py-1.5 rounded text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                                chartDataType === 'humidity'
+                                  ? 'bg-primary-600 text-white'
+                                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                              }`}
+                            >
+                              <Droplet className="w-4 h-4" />
+                              湿度
+                            </button>
+                          </>
+                        )}
                       </div>
-                      <div className="flex-1 overflow-hidden">
+                    )}
+                  </div>
+                </div>
+                {/* 内容区域 */}
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  {activeTab === 'list' ? (
+                    /* 数据表格 - Handsontable */
+                    <div className="h-full flex flex-col bg-white">
+                      <div className="flex-1" style={{ overflow: 'hidden', position: 'relative' }}>
                         {renderDeviceIds.length === 0 ? (
                           <div className="h-full flex items-center justify-center">
                             <div className="text-center text-gray-500">
@@ -3767,7 +3935,7 @@ const collectSelectionData = useCallback(
                             </div>
                           </div>
                         ) : (
-                          <div className="h-full" >
+                          <div className="h-full">
                             <HotTable
                               ref={hotTableRef}
                               data={stableTableData}
@@ -3776,7 +3944,7 @@ const collectSelectionData = useCallback(
                               rowHeaders={(row) => String(row + 1)}
                               rowHeaderWidth={40}
                               width="100%"
-                              height="calc(100vh - 16.8rem)"
+                              height="100%"
                               autoColumnSize={false}
                               licenseKey="non-commercial-and-evaluation"
                               contextMenu={false}
@@ -3784,8 +3952,9 @@ const collectSelectionData = useCallback(
                               manualColumnMove={true}
                               manualRowResize={true}
                               manualColumnResize={true}
-                              autoWrapRow={true}
-                              autoWrapCol={true}
+                              autoWrapRow={false}
+                              autoWrapCol={false}
+                              wordWrap={false}
                               filters={false}
                               dropdownMenu={false}
                               comments={true}
@@ -3939,14 +4108,16 @@ const collectSelectionData = useCallback(
                     <CurveChartPanel
                       renderDeviceIds={renderDeviceIds}
                       deviceDataMap={deviceDataMap}
-                      activeTab={activeTab as 'temperature' | 'humidity'}
+                      activeTab={chartDataType}
                       taskId={taskId}
+                      devices={devices}
                       setAlert={setAlert}
                       applyDeviceDataUpdate={applyDeviceDataUpdate}
                       updateCacheStats={updateCacheStats}
                       fetchDevices={async () => {
                         await fetchDevices();
                       }}
+                      mode={chartMode}
                     />
                   )}
                 </div>
@@ -4498,6 +4669,18 @@ const collectSelectionData = useCallback(
                         <p className="text-xs text-gray-500 mt-1">
                           支持多种时间格式，系统会自动识别
                         </p>
+                        <div className="mt-2 flex items-center">
+                          <input
+                            type="checkbox"
+                            id="remove-seconds-checkbox"
+                            checked={removeSeconds}
+                            onChange={(e) => setRemoveSeconds(e.target.checked)}
+                            className="h-4 w-4 text-primary-600 focus:ring-primary-500 border-gray-300 rounded"
+                          />
+                          <label htmlFor="remove-seconds-checkbox" className="ml-2 text-sm text-gray-700">
+                            导入时去掉秒数（默认勾选）
+                          </label>
+                        </div>
                       </div>
                     </div>
                     <div className="mt-4 p-3 bg-gray-50 rounded-md">

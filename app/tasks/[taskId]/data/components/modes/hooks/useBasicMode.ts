@@ -59,6 +59,11 @@ export const useBasicMode = ({
     [renderDeviceIds, deviceDataMap]
   );
 
+  // 当前选区内的数据条数（所有设备汇总）
+  const selectionDataCount = selectionRange
+    ? collectSelectionData(selectionRange, null).length
+    : 0;
+
   // 图表选择事件处理
   const handleChartSelection = useCallback(
     (event: Highcharts.SelectEventObject) => {
@@ -488,6 +493,7 @@ export const useBasicMode = ({
   return {
     selectionRange,
     setSelectionRange,
+    selectionDataCount,
     contextMenuState,
     setContextMenuState,
     copiedData,
