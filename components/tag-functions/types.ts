@@ -34,7 +34,11 @@ export type TagFunctionType =
   | 'powerConsumptionRate'
   | 'maxPowerUsageDuration'
   | 'avgCoolingRate'
-  | 'deviceTimePointTemp';
+  | 'deviceTimePointTemp'
+  | 'maxTempDiffAtSameTime'
+  | 'maxTempDiffTimePoint'
+  | 'tempFluctuation'
+  | 'tempUniformityAverage';
 
 export interface TagFunctionConfig {
   functionType: TagFunctionType;
@@ -50,6 +54,7 @@ export interface TagFunctionConfig {
   startPowerTagId?: string;
   endPowerTagId?: string;
   timeTagId?: string;
+  decimalPlaces?: number;
   lastRunAt?: string;
   lastMessage?: string;
   lastStatus?: TagFunctionStatus;

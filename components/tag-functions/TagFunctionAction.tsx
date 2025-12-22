@@ -22,8 +22,8 @@ const LOCATION_FUNCTIONS: Array<{ value: TagFunctionType; label: string }> = [
   { value: 'tempExceedLower', label: '数据温度低于下限测点' },
   { value: 'humidityExceedUpper', label: '数据湿度超过上限测点' },
   { value: 'humidityExceedLower', label: '数据湿度低于下限测点' },
-  { value: 'maxTempLocation', label: '数据温度最高值对应验证测点' },
-  { value: 'minTempLocation', label: '数据温度最低值对应验证测点' },
+  { value: 'maxTempLocation', label: '数据温度最高值对应测点' },
+  { value: 'minTempLocation', label: '数据温度最低值对应测点' },
 ];
 
 const THRESHOLD_HINT: Partial<Record<TagFunctionType, number>> = {
@@ -58,6 +58,9 @@ const NUMBER_FUNCTIONS: Array<{ value: TagFunctionType; label: string }> = [
   { value: 'maxPowerUsageDuration', label: '电量最长使用时长' },
   { value: 'avgCoolingRate', label: '平均降温速率' },
   { value: 'deviceTimePointTemp', label: '获取设备时间点温度' },
+  { value: 'maxTempDiffAtSameTime', label: '同一时间各测点间最大温度差值' },
+  { value: 'tempFluctuation', label: '温度波动度' },
+  { value: 'tempUniformityAverage', label: '温度均匀度' },
 ];
 
 const TIME_FUNCTIONS: Array<{ value: TagFunctionType; label: string }> = [
@@ -65,6 +68,7 @@ const TIME_FUNCTIONS: Array<{ value: TagFunctionType; label: string }> = [
   { value: 'tempFirstReachLowerTime', label: '数据温度第一次到达下限时间' },
   { value: 'tempMaxTime', label: '数据取最高点时间' },
   { value: 'tempMinTime', label: '数据取最低点时间' },
+  { value: 'maxTempDiffTimePoint', label: '同一时间各测点间最大温度差时间点' },
 ];
 
 function getDefaultFunction(type: TemplateTag['type']): TagFunctionType | null {
@@ -136,18 +140,12 @@ export function TagFunctionAction({ tag, allTags, taskId, onApply }: TagFunction
     setShowConfig(true);
   };
 
-  const handleContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    setShowDetail(true);
-  };
-
   return (
     <>
       <button
         type="button"
         disabled={!availableFunctions.length}
         onClick={handleClick}
-        onContextMenu={handleContextMenu}
         className={`p-1 rounded hover:bg-gray-100 ${colorClass} disabled:opacity-50`}
         title={tooltip}
       >
@@ -187,6 +185,8 @@ export function TagFunctionAction({ tag, allTags, taskId, onApply }: TagFunction
                 numberTags={numberTags}
                 defaultConfig={pendingConfig || functionConfig}
                 onSubmit={handleSubmitConfig}
+                onShowDetail={() => setShowDetail(true)}
+                hasFunctionConfig={!!functionConfig}
               />
             )}
           </div>
@@ -213,6 +213,8 @@ interface FunctionFormProps {
   numberTags: TemplateTag[];
   defaultConfig: TagFunctionConfig | null | undefined;
   onSubmit: (config: TagFunctionConfig) => void;
+  onShowDetail: () => void;
+  hasFunctionConfig: boolean;
 }
 
 interface DetailPanelProps {
@@ -260,7 +262,7 @@ function DetailPanel({ functionConfig, allTags, onClose }: DetailPanelProps) {
         <div className="flex items-center justify-between mb-3">
           <div>
             <p className="text-sm font-semibold text-gray-800">函数数据处理详情</p>
-            <p className="text-xs text-gray-500">右击函数图标可查看最近一次计算日志</p>
+            <p className="text-xs text-gray-500">点击“处理详情”可查看最近一次计算日志</p>
           </div>
           <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
             关闭
@@ -399,6 +401,12 @@ function DetailPanel({ functionConfig, allTags, onClose }: DetailPanelProps) {
                   {functionConfig.threshold !== undefined ? functionConfig.threshold : '默认'}
                 </p>
               </div>
+              {functionConfig.decimalPlaces !== undefined && (
+                <div>
+                  <p className="text-xs text-gray-500">小数位数</p>
+                  <p className="font-medium">{functionConfig.decimalPlaces}</p>
+                </div>
+              )}
               <div>
                 <p className="text-xs text-gray-500">输出结果</p>
                 <p className="font-medium break-words">
@@ -442,6 +450,8 @@ function FunctionForm({
   numberTags,
   defaultConfig,
   onSubmit,
+  onShowDetail,
+  hasFunctionConfig,
 }: FunctionFormProps) {
   const [functionType, setFunctionType] = useState<TagFunctionType>(
     defaultConfig?.functionType || availableFunctions[0].value
@@ -458,12 +468,14 @@ function FunctionForm({
   const [startPowerTagId, setStartPowerTagId] = useState<string | undefined>(defaultConfig?.startPowerTagId);
   const [endPowerTagId, setEndPowerTagId] = useState<string | undefined>(defaultConfig?.endPowerTagId);
   const [timeTagId, setTimeTagId] = useState<string | undefined>(defaultConfig?.timeTagId);
+  const [decimalPlaces, setDecimalPlaces] = useState<number | undefined>(defaultConfig?.decimalPlaces ?? 2);
   const [functionSearch, setFunctionSearch] = useState('');
   const [showFunctionDropdown, setShowFunctionDropdown] = useState(false);
   const functionDropdownRef = useRef<HTMLDivElement>(null);
 
   const isArrivalFunction = functionType.includes('Reach');
   const needsThreshold = isArrivalFunction || functionType.includes('Exceed');
+  const needsDecimalPlaces = functionType === 'tempFluctuation' || functionType === 'tempUniformityAverage';
 
   // 过滤函数列表
   const filteredFunctions = useMemo(() => {
@@ -479,6 +491,28 @@ function FunctionForm({
     () => availableFunctions.find((fn) => fn.value === functionType),
     [availableFunctions, functionType]
   );
+
+  // 渲染带颜色的标签文本（温度蓝色，湿度绿色）
+  const renderColoredLabel = (label: string) => {
+    const parts = label.split(/(温度|湿度)/);
+    return parts.map((part, index) => {
+      if (part === '温度') {
+        return (
+          <span key={index} className="text-blue-600 font-medium">
+            {part}
+          </span>
+        );
+      }
+      if (part === '湿度') {
+        return (
+          <span key={index} className="text-green-600 font-medium">
+            {part}
+          </span>
+        );
+      }
+      return <span key={index}>{part}</span>;
+    });
+  };
 
   // 点击外部关闭下拉
   useEffect(() => {
@@ -610,6 +644,7 @@ function FunctionForm({
       startPowerTagId: functionType === 'powerConsumptionRate' || functionType === 'maxPowerUsageDuration' ? startPowerTagId : undefined,
       endPowerTagId: functionType === 'powerConsumptionRate' || functionType === 'maxPowerUsageDuration' ? endPowerTagId : undefined,
       timeTagId: functionType === 'deviceTimePointTemp' ? timeTagId : undefined,
+      decimalPlaces: needsDecimalPlaces ? (decimalPlaces ?? 2) : undefined,
     });
   };
 
@@ -623,7 +658,9 @@ function FunctionForm({
             onClick={() => setShowFunctionDropdown(!showFunctionDropdown)}
             className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white flex items-center justify-between"
           >
-            <span className="truncate">{selectedFunction?.label || '请选择函数方法'}</span>
+            <span className="truncate">
+              {selectedFunction ? renderColoredLabel(selectedFunction.label) : '请选择函数方法'}
+            </span>
             <ChevronDown
               className={`w-4 h-4 text-gray-400 transition-transform ${
                 showFunctionDropdown ? 'transform rotate-180' : ''
@@ -675,7 +712,7 @@ function FunctionForm({
                         functionType === fn.value ? 'bg-primary-50 text-primary-700 font-medium' : 'text-gray-700'
                       }`}
                     >
-                      {fn.label}
+                      {renderColoredLabel(fn.label)}
                     </button>
                   ))
                 )}
@@ -915,7 +952,35 @@ function FunctionForm({
         </>
       )}
 
+      {needsDecimalPlaces && (
+        <div>
+          <label className="block text-xs text-gray-600 mb-1">小数位数（默认2位）</label>
+          <input
+            type="number"
+            min="0"
+            max="10"
+            value={decimalPlaces ?? ''}
+            onChange={(e) => setDecimalPlaces(e.target.value === '' ? undefined : Number(e.target.value))}
+            placeholder="留空使用默认值 2"
+            className="w-full px-3 py-2 border rounded text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+          />
+        </div>
+      )}
+
       <div className="flex justify-end space-x-3 pt-2 border-t">
+        <button
+          type="button"
+          onClick={onShowDetail}
+          disabled={!hasFunctionConfig}
+          className={`px-3 py-2 text-sm rounded border ${
+            hasFunctionConfig
+              ? 'text-primary-700 border-primary-200 bg-primary-50 hover:bg-primary-100'
+              : 'text-gray-400 border-gray-200 bg-gray-50 cursor-not-allowed'
+          }`}
+          title={hasFunctionConfig ? '查看最近一次计算日志' : '暂无计算记录'}
+        >
+          处理详情
+        </button>
         <button
           type="submit"
           className="px-4 py-2 text-sm bg-primary-600 text-white rounded hover:bg-primary-700"

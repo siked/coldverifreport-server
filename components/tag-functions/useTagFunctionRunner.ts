@@ -54,6 +54,7 @@ const VALUE_FUNCTIONS: TagFunctionType[] = [
   'maxPowerUsageDuration',
   'avgCoolingRate',
   'deviceTimePointTemp',
+  'maxTempDiffAtSameTime',
 ];
 
 const TIME_FUNCTIONS: TagFunctionType[] = [
@@ -61,6 +62,7 @@ const TIME_FUNCTIONS: TagFunctionType[] = [
   'tempFirstReachLowerTime',
   'tempMaxTime',
   'tempMinTime',
+  'maxTempDiffTimePoint',
 ];
 
 const ARRIVAL_FUNCTIONS: TagFunctionType[] = [
@@ -121,8 +123,8 @@ const getDistinctLocations = (ids: string[], allTags: any[]): string[] => {
   const list: string[] = [];
   ids.forEach((id) => {
     const tag = allTags.find((t) => t._id === id);
-    if (tag && tag.type === 'location' && Array.isArray(tag.value)) {
-      list.push(...tag.value);
+    if (tag && tag.type === 'location') {
+      list.push(...toLocationArray(tag.value));
     }
   });
   return Array.from(new Set(list.filter(Boolean)));
@@ -379,14 +381,6 @@ export function useTagFunctionRunner({ tag, allTags, taskId, onApply }: TagFunct
       const queryInfo = [
         `查询设备: ${locations.join(' | ') || '无'}`,
         `本地时间: ${rangeDetail}`,
-        `本地 start(ms): ${start.getTime()}`,
-        `本地 end(ms): ${end.getTime()}`,
-        `本地 start ISO: ${start.toISOString()}`,
-        `本地 end ISO: ${end.toISOString()}`,
-        `查询 start(ms): ${startQuery.getTime()} (+8小时)`,
-        `查询 end(ms): ${endQuery.getTime()} (+8小时)`,
-        `查询 start ISO: ${startQuery.toISOString()}`,
-        `查询 end ISO: ${endQuery.toISOString()}`,
         `命中: ${data.length} 条`,
       ].join('\n');
       if (!data.length) {
@@ -399,6 +393,83 @@ export function useTagFunctionRunner({ tag, allTags, taskId, onApply }: TagFunct
 
       const thresholdCfg = FUNCTION_THRESHOLD_MAP[config.functionType];
       const threshold = config.threshold ?? thresholdCfg?.defaultValue;
+
+      if (config.functionType === 'maxTempDiffAtSameTime' || config.functionType === 'maxTempDiffTimePoint') {
+        // 过滤出在指定布点范围内的数据
+        const filteredData = data.filter((item) => locations.includes(item.deviceId));
+        if (!filteredData.length) {
+          return {
+            status: 'error',
+            message: '时间范围内没有匹配的布点数据',
+            detail: queryInfo,
+          };
+        }
+
+        // 按时间点分组（精确到分钟），计算每个时间点的温度差值
+        const timePointMap = new Map<string, { temps: number[]; timestamp: Date }>();
+        filteredData.forEach((item) => {
+          const temp = item.temperature;
+          if (!Number.isFinite(temp)) return;
+
+          // 将时间戳格式化为分钟级别（去掉秒和毫秒）
+          const timestamp = new Date(item.timestamp as any);
+          const timeKey = `${timestamp.getFullYear()}-${String(timestamp.getMonth() + 1).padStart(2, '0')}-${String(timestamp.getDate()).padStart(2, '0')} ${String(timestamp.getHours()).padStart(2, '0')}:${String(timestamp.getMinutes()).padStart(2, '0')}`;
+
+          const existing = timePointMap.get(timeKey);
+          if (!existing) {
+            timePointMap.set(timeKey, { temps: [temp], timestamp });
+          } else {
+            existing.temps.push(temp);
+          }
+        });
+
+        if (timePointMap.size === 0) {
+          return { status: 'error', message: '没有有效的温度数据' };
+        }
+
+        // 计算每个时间点的温度差值（最大值 - 最小值）
+        const timePointDiffs: Array<{ timeKey: string; diff: number; timestamp: Date; maxTemp: number; minTemp: number }> = [];
+        timePointMap.forEach((data, timeKey) => {
+          const maxTemp = Math.max(...data.temps);
+          const minTemp = Math.min(...data.temps);
+          const diff = maxTemp - minTemp;
+          timePointDiffs.push({
+            timeKey,
+            diff,
+            timestamp: data.timestamp,
+            maxTemp,
+            minTemp,
+          });
+        });
+
+        // 找出差值最大的时间点
+        let maxDiffItem = timePointDiffs[0];
+        for (const item of timePointDiffs) {
+          if (item.diff > maxDiffItem.diff) {
+            maxDiffItem = item;
+          }
+        }
+
+        if (config.functionType === 'maxTempDiffAtSameTime') {
+          // 返回差值
+          const fixed = Number.isFinite(maxDiffItem.diff) ? Number(maxDiffItem.diff.toFixed(1)) : maxDiffItem.diff;
+          return {
+            status: 'success',
+            message: `计算完成：${fixed}`,
+            value: fixed,
+            detail: `${queryInfo}\n最大温度差值: ${fixed}\n对应时间点: ${maxDiffItem.timeKey}\n该时间点最高温度: ${maxDiffItem.maxTemp.toFixed(1)}\n该时间点最低温度: ${maxDiffItem.minTemp.toFixed(1)}\n时间点总数: ${timePointDiffs.length}`,
+          };
+        } else {
+          // 返回时间点
+          const formattedTime = formatDateTime(maxDiffItem.timestamp);
+          return {
+            status: 'success',
+            message: `计算完成：${formattedTime}`,
+            value: formattedTime,
+            detail: `${queryInfo}\n最大温度差值: ${maxDiffItem.diff.toFixed(1)}\n对应时间点: ${formattedTime}\n该时间点最高温度: ${maxDiffItem.maxTemp.toFixed(1)}\n该时间点最低温度: ${maxDiffItem.minTemp.toFixed(1)}\n时间点总数: ${timePointDiffs.length}`,
+          };
+        }
+      }
 
       if (VALUE_FUNCTIONS.includes(config.functionType)) {
         const metric = config.functionType.includes('Temp') ? 'temperature' : 'humidity';
@@ -761,6 +832,95 @@ export function useTagFunctionRunner({ tag, allTags, taskId, onApply }: TagFunct
           message: `计算完成：${fixed}`,
           value: fixed,
           detail: `${queryInfo}\n设备数量: ${deviceTempMap.size}\n温度变化范围总和: ${fixed}\n\n设备详情:\n${deviceDetails.join('\n')}`,
+        };
+      }
+
+      if (config.functionType === 'tempFluctuation') {
+        // 过滤出在指定布点范围内的数据
+        const filteredData = data.filter((item) => locations.includes(item.deviceId));
+        if (!filteredData.length) {
+          return {
+            status: 'error',
+            message: '时间范围内没有匹配的布点数据',
+            detail: queryInfo,
+          };
+        }
+
+        const temps = filteredData
+          .map((item) => item.temperature)
+          .filter((temp) => Number.isFinite(temp));
+
+        if (!temps.length) {
+          return { status: 'error', message: '没有有效的温度数据' };
+        }
+
+        const maxTemp = Math.max(...temps);
+        const minTemp = Math.min(...temps);
+        const dp = config.decimalPlaces ?? 2;
+        const fluctuation = (maxTemp - minTemp) / 2;
+        const fixed = Number.isFinite(fluctuation) ? Number(fluctuation.toFixed(dp)) : fluctuation;
+
+        return {
+          status: 'success',
+          message: `计算完成：±${fixed}`,
+          value: fixed,
+          detail: `${queryInfo}\n小数位数: ${dp}\n最高温度: ${maxTemp.toFixed(dp)}\n最低温度: ${minTemp.toFixed(dp)}\n温度差: ${(maxTemp - minTemp).toFixed(dp)}\n温度波动度(±(max-min)/2): ±${fixed}`,
+        };
+      }
+
+      if (config.functionType === 'tempUniformityAverage') {
+        // 过滤出在指定布点范围内的数据
+        const filteredData = data.filter((item) => locations.includes(item.deviceId));
+        if (!filteredData.length) {
+          return {
+            status: 'error',
+            message: '时间范围内没有匹配的布点数据',
+            detail: queryInfo,
+          };
+        }
+
+        // 按时间点（分钟粒度）分组
+        const timePointMap = new Map<string, number[]>();
+        filteredData.forEach((item) => {
+          const temp = item.temperature;
+          if (!Number.isFinite(temp)) return;
+          const timestamp = new Date(item.timestamp as any);
+          const timeKey = `${timestamp.getFullYear()}-${String(timestamp.getMonth() + 1).padStart(2, '0')}-${String(timestamp.getDate()).padStart(2, '0')} ${String(timestamp.getHours()).padStart(2, '0')}:${String(timestamp.getMinutes()).padStart(2, '0')}`;
+          const list = timePointMap.get(timeKey);
+          if (!list) {
+            timePointMap.set(timeKey, [temp]);
+          } else {
+            list.push(temp);
+          }
+        });
+
+        if (timePointMap.size === 0) {
+          return { status: 'error', message: '没有有效的温度数据' };
+        }
+
+        // 计算每次测量的温度差（最高-最低），再取算术平均值
+        const timePointDiffs: Array<{ timeKey: string; diff: number; max: number; min: number }> = [];
+        timePointMap.forEach((temps, timeKey) => {
+          const max = Math.max(...temps);
+          const min = Math.min(...temps);
+          timePointDiffs.push({ timeKey, diff: max - min, max, min });
+        });
+
+        const dp = config.decimalPlaces ?? 2;
+        const avgDiff =
+          timePointDiffs.reduce((sum, item) => sum + item.diff, 0) / timePointDiffs.length;
+        const fixed = Number.isFinite(avgDiff) ? Number(avgDiff.toFixed(dp)) : avgDiff;
+
+        const preview = timePointDiffs
+          .slice(0, 10)
+          .map((item, idx) => `${idx + 1}. ${item.timeKey} 差值:${item.diff.toFixed(dp)}`)
+          .join('\n');
+
+        return {
+          status: 'success',
+          message: `计算完成：${fixed}`,
+          value: fixed,
+          detail: `${queryInfo}\n小数位数: ${dp}\n时间点数量: ${timePointDiffs.length}\n温度均匀度(差值算术平均): ${fixed}\n\n每次测量差值(前10条):\n${preview || '无'}`,
         };
       }
 
