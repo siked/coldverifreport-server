@@ -2165,6 +2165,271 @@ const computeCurveChartInputSignature = (
     [editor]
   );
 
+  // 格式化日期为 YYYY-MM-DD HH:mm:ss
+  const formatDateTime = useCallback((date: Date | string): string => {
+    const d = date instanceof Date ? date : new Date(date);
+    if (isNaN(d.getTime())) {
+      return String(date);
+    }
+    const year = String(d.getFullYear());
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    const seconds = String(d.getSeconds()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  }, []);
+
+  // 将文本按最大宽度自动换行
+  const wrapText = useCallback((ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string[] => {
+    const words = text.split('');
+    const lines: string[] = [];
+    let currentLine = '';
+
+    for (let i = 0; i < words.length; i++) {
+      const char = words[i];
+      const testLine = currentLine + char;
+      const metrics = ctx.measureText(testLine);
+      const testWidth = metrics.width;
+
+      if (testWidth > maxWidth && currentLine.length > 0) {
+        lines.push(currentLine);
+        currentLine = char;
+      } else {
+        currentLine = testLine;
+      }
+    }
+    if (currentLine.length > 0) {
+      lines.push(currentLine);
+    }
+
+    return lines.length > 0 ? lines : [''];
+  }, []);
+
+  // 生成错误占位图（红色边框，错误信息居中显示在图片内部上方，支持自动换行）
+  const createErrorPlaceholderImage = useCallback((errorMessage: string): string => {
+    const canvas = document.createElement('canvas');
+    const width = 800;
+    const height = 400;
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    
+    if (!ctx) {
+      return '';
+    }
+    
+    // 绘制白色背景
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, width, height);
+    
+    // 绘制红色边框
+    ctx.strokeStyle = '#ef4444';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(2, 2, width - 4, height - 4);
+    
+    // 设置文本样式
+    ctx.fillStyle = '#ef4444';
+    ctx.font = 'bold 20px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    
+    // 计算可用区域（留出边距）
+    const padding = 20;
+    const maxTextWidth = width - padding * 2;
+    const lineHeight = 28;
+    const startY = padding + 20; // 从顶部开始，留出一些空间
+    const maxHeight = height - startY - padding;
+    
+    // 处理错误信息：先处理日期格式化，然后换行
+    let processedMessage = errorMessage;
+    
+    // 格式化日期字符串（匹配类似 "Wed Aug 20 2025 14:00:00 GMT+0800 (中国标准时间)" 的格式）
+    // 匹配各种日期格式并格式化
+    processedMessage = processedMessage.replace(
+      /([A-Z][a-z]{2,3}\s+[A-Z][a-z]{2,3}\s+\d{1,2}\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+GMT[+-]\d{4}(?:\s+\([^)]+\))?)/g,
+      (match) => {
+        try {
+          const date = new Date(match);
+          if (!isNaN(date.getTime())) {
+            return formatDateTime(date);
+          }
+        } catch (e) {
+          // 如果解析失败，返回原字符串
+        }
+        return match;
+      }
+    );
+    
+    // 也尝试直接解析整个字符串中的日期对象
+    if (processedMessage.includes('GMT') || processedMessage.match(/\d{4}-\d{2}-\d{2}/)) {
+      // 尝试提取并格式化所有可能的日期字符串
+      processedMessage = processedMessage.replace(
+        /(?:^|\s)(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/g,
+        (match, dateStr) => {
+          try {
+            const date = new Date(dateStr);
+            if (!isNaN(date.getTime())) {
+              return ' ' + formatDateTime(date);
+            }
+          } catch (e) {
+            // 如果解析失败，返回原字符串
+          }
+          return match;
+        }
+      );
+    }
+    
+    // 先按换行符分割，然后对每一行进行自动换行
+    const originalLines = processedMessage.split('\n');
+    const wrappedLines: string[] = [];
+    
+    originalLines.forEach((line) => {
+      const wrapped = wrapText(ctx, line, maxTextWidth);
+      wrappedLines.push(...wrapped);
+    });
+    
+    // 计算总高度，如果超出则调整
+    const totalHeight = wrappedLines.length * lineHeight;
+    let finalLines = wrappedLines;
+    let finalLineHeight = lineHeight;
+    let finalFontSize = 20;
+    
+    // 如果内容超出可用高度，缩小字体或截断
+    if (totalHeight > maxHeight) {
+      // 尝试缩小字体
+      const scaleFactor = Math.max(0.6, maxHeight / totalHeight);
+      finalFontSize = Math.max(12, Math.floor(20 * scaleFactor));
+      finalLineHeight = Math.floor(28 * scaleFactor);
+      ctx.font = `bold ${finalFontSize}px Arial`;
+      
+      // 重新计算换行（使用新字体）
+      const newWrappedLines: string[] = [];
+      originalLines.forEach((line) => {
+        const wrapped = wrapText(ctx, line, maxTextWidth);
+        newWrappedLines.push(...wrapped);
+      });
+      finalLines = newWrappedLines;
+      
+      // 如果还是超出，截断并添加省略号
+      const maxLines = Math.floor(maxHeight / finalLineHeight);
+      if (finalLines.length > maxLines) {
+        finalLines = finalLines.slice(0, maxLines - 1);
+        // 最后一行添加省略号
+        const lastLine = finalLines[finalLines.length - 1];
+        const ellipsis = '...';
+        const testLine = lastLine + ellipsis;
+        const metrics = ctx.measureText(testLine);
+        if (metrics.width <= maxTextWidth) {
+          finalLines[finalLines.length - 1] = testLine;
+        } else {
+          // 如果添加省略号后超出，截断最后一行
+          let truncated = lastLine;
+          while (ctx.measureText(truncated + ellipsis).width > maxTextWidth && truncated.length > 0) {
+            truncated = truncated.slice(0, -1);
+          }
+          finalLines[finalLines.length - 1] = truncated + ellipsis;
+        }
+      }
+    }
+    
+    // 绘制文本（居中）
+    finalLines.forEach((line, index) => {
+      const y = startY + index * finalLineHeight;
+      ctx.fillText(line, width / 2, y);
+    });
+    
+    return canvas.toDataURL('image/png');
+  }, [formatDateTime, wrapText]);
+
+  // 在图片位置显示错误占位图
+  const showErrorInImage = useCallback(
+    (pos: number, errorMessage: string, payload?: DataSourcePayload) => {
+      if (!editor) {
+        console.error('showErrorInImage: editor is null');
+        return;
+      }
+      
+      const errorImageUrl = createErrorPlaceholderImage(errorMessage);
+      if (!errorImageUrl) {
+        console.error('Failed to create error placeholder image');
+        return;
+      }
+      
+      // 查找图片节点
+      let node = editor.state.doc.nodeAt(pos);
+      let actualPos = pos;
+      
+      if (!node || node.type.name !== 'image') {
+        // 尝试遍历所有图片节点
+        editor.state.doc.descendants((n, p) => {
+          if (n.type.name === 'image' && p === pos) {
+            node = n;
+            actualPos = p;
+            return false;
+          }
+          return true;
+        });
+      }
+      
+      if (!node || node.type.name !== 'image') {
+        console.warn('showErrorInImage: Image node not found at pos:', pos);
+        return;
+      }
+      
+      // 如果提供了 payload，保持原有的 dataSource 信息；否则创建默认的
+      let finalPayload: CurveChartDataSource;
+      if (payload && payload.type === 'curveChart') {
+        finalPayload = payload as CurveChartDataSource;
+      } else {
+        const existingDataSource = node.attrs.dataSource ? parseDataSource(node.attrs.dataSource) : null;
+        finalPayload = {
+          type: 'curveChart',
+          config: (existingDataSource && existingDataSource.type === 'curveChart' ? existingDataSource.config : {}) as any,
+          imageUrl: errorImageUrl,
+        };
+      }
+      
+      // 创建新的属性对象
+      const newAttrs = {
+        ...node.attrs,
+        src: errorImageUrl,
+        dataSource: stringifyDataSource(finalPayload),
+        dataSourceType: finalPayload.type,
+        tooltip: formatTooltip(finalPayload),
+      };
+      
+      // 直接使用事务更新节点
+      const tr = editor.state.tr;
+      tr.setNodeMarkup(actualPos, undefined, newAttrs);
+      editor.view.dispatch(tr);
+      
+      // 更新 DOM 元素
+      setTimeout(() => {
+        if (!editor) return;
+        const { view } = editor;
+        const editorElement = view.dom;
+        const allImages = editorElement.querySelectorAll('img');
+        
+        allImages.forEach((img) => {
+          const imgSrc = img.getAttribute('src');
+          if (imgSrc === node?.attrs?.src || (node?.attrs?.src && imgSrc?.includes(node.attrs.src.split('/').pop() || ''))) {
+            (img as HTMLImageElement).src = errorImageUrl;
+            const dataSourceStr = stringifyDataSource(finalPayload);
+            if (dataSourceStr) {
+              img.setAttribute('data-source', dataSourceStr);
+              img.setAttribute('data-source-type', finalPayload.type);
+              if (formatTooltip(finalPayload)) {
+                img.setAttribute('title', formatTooltip(finalPayload));
+              }
+            }
+          }
+        });
+      }, 0);
+    },
+    [editor, createErrorPlaceholderImage]
+  );
+
   const applyDataSourceToImage = useCallback(
     (pos: number, payload: DataSourcePayload, nextSrc: string) => {
       if (!editor) {
@@ -2434,17 +2699,38 @@ const computeCurveChartInputSignature = (
               applyDataSourceToImage(pos, payload, imageUrl);
               console.log(`[曲线图恢复] 成功恢复曲线图，位置: ${pos}`);
             } else {
+              // 上传失败时在图片位置显示错误占位图
+              const errorData = await response.json().catch(() => ({}));
+              const errorMessage = errorData.error || '上传曲线图失败';
               console.error(`[曲线图恢复] 上传曲线图失败，位置: ${pos}`);
+              showErrorInImage(pos, errorMessage, {
+                type: 'curveChart',
+                config,
+                imageUrl: '',
+                inputSignature: nextSignature,
+              });
             }
           } catch (err: any) {
+            // 恢复失败时在图片位置显示错误占位图
+            const errorMessage = err.message || '恢复曲线图失败';
             console.error(`[曲线图恢复] 恢复曲线图失败，位置: ${pos}:`, err);
+            showErrorInImage(pos, errorMessage, {
+              type: 'curveChart',
+              config,
+              imageUrl: '',
+              inputSignature: computeCurveChartInputSignature(
+                config,
+                selectedTask._id,
+                tagsForChartRef.current
+              ),
+            });
           }
         });
       }
     };
     
     setTimeout(restoreCurveCharts, 500);
-  }, [editor, selectedTask, tagsValueSignature, applyDataSourceToImage]);
+  }, [editor, selectedTask, tagsValueSignature, applyDataSourceToImage, showErrorInImage]);
 
   const removeDataSourceFromTarget = useCallback(
     (target?: DataSourceMenuState | null) => {
@@ -5088,7 +5374,10 @@ const computeCurveChartInputSignature = (
           onChange={setCurveChartConfig}
           onApply={async () => {
             if (!curveChartConfig || !selectedTask || typeof dataSourceMenu.imagePos !== 'number') {
-              alert('请先配置曲线图参数并关联任务');
+              // 在图片位置显示错误占位图
+              if (typeof dataSourceMenu.imagePos === 'number') {
+                showErrorInImage(dataSourceMenu.imagePos, '请先配置曲线图参数并关联任务');
+              }
               return;
             }
             try {
@@ -5172,7 +5461,20 @@ const computeCurveChartInputSignature = (
                 setCurveChartConfig(null);
               }, 300);
             } catch (err: any) {
-              alert(err.message || '生成曲线图失败');
+              // 在图片位置显示错误占位图
+              if (typeof dataSourceMenu.imagePos === 'number') {
+                const errorMessage = err.message || '生成曲线图失败';
+                showErrorInImage(dataSourceMenu.imagePos, errorMessage, {
+                  type: 'curveChart',
+                  config: curveChartConfig!,
+                  imageUrl: '',
+                  inputSignature: computeCurveChartInputSignature(
+                    curveChartConfig!,
+                    selectedTask._id,
+                    tags
+                  ),
+                });
+              }
             } finally {
               setIsUploading(false);
               setTimeout(() => setUploadProgress(0), 500);

@@ -247,12 +247,9 @@ export async function generateCurveChart(
       startTime: startTime.toISOString(),
       endTime: endTime.toISOString(),
     });
-    throw new Error('内存中没有数据，请先关联任务');
+    throw new Error(`指定时间范围内没有数据 \n 开始时间: ${startTime.toISOString()} \n 结束时间: ${endTime.toISOString()}`);
   }
 
-  if (allData.length === 0) {
-    throw new Error('指定时间范围内没有数据');
-  }
 
   // 准备图表数据
   const chartData: {

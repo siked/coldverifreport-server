@@ -224,7 +224,25 @@ export default function TaskReportCreatePage({
 
   useEffect(() => {
     if (task?.taskName) {
-      document.title = `生成-${task.taskName}`;
+      document.title = `生成-Runtime ReferenceError
+
+can't access lexical declaration 'showImageTooltip' before initialization
+
+components\TiptapEditor.tsx (2500:73) @ _c<
+
+  2498 |     
+  2499 |     setTimeout(restoreCurveCharts, 500);
+> 2500 |   }, [editor, selectedTask, tagsValueSignature, applyDataSourceToImage, showImageTooltip]);
+       |                                                                         ^
+  2501 |
+  2502 |   const removeDataSourceFromTarget = useCallback(
+  2503 |     (target?: DataSourceMenuState | null) => {
+
+Call Stack 54
+Show 42 ignore-listed frame(s)
+_c<
+components\TiptapEditor.tsx (2500:73)
+(app-pages-browser)/./node_modules/next/dist/compiled/scheduler/cjs/scheduler.development.js${task.taskName}`;
     } else {
       document.title = '生成报告';
     }

@@ -2705,40 +2705,65 @@ export default function TaskDataPage() {
   // 处理趋势生成器生成的数据
   const handleTrendGeneratorData = async (generatedData: TemperatureHumidityData[], deviceId: string) => {
     try {
+      // 计算生成数据的时间范围（最小和最大时间戳）
+      if (generatedData.length === 0) {
+        setAlert({ isOpen: true, message: '没有生成数据', type: 'warning' });
+        return;
+      }
+
+      const timestamps = generatedData.map((item) => new Date(item.timestamp).getTime());
+      const minTimestamp = Math.min(...timestamps);
+      const maxTimestamp = Math.max(...timestamps);
+
+      // 读取该设备的现有数据
+      const existingData = (await loadFromCache(taskId, deviceId)) || [];
+
+      // 删除该设备在相同时间范围内的旧数据（保留时间范围外的数据）
+      const filteredData = existingData.filter((item) => {
+        const itemTimestamp = new Date(item.timestamp).getTime();
+        // 保留时间范围外的数据（不在生成数据的时间范围内）
+        return itemTimestamp < minTimestamp || itemTimestamp > maxTimestamp;
+      });
+
+      // 将新生成的数据添加到过滤后的数据中
       const dataWithTaskId: CacheData[] = generatedData.map((item) => ({
         ...item,
         taskId,
       }));
-      await addToCache(taskId, dataWithTaskId);
+      const mergedData = [...filteredData, ...dataWithTaskId].sort(
+        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      );
+
+      // 保存到缓存
+      await saveToCache(taskId, deviceId, mergedData);
       await updateCacheStats();
 
       // 更新设备列表
       await fetchDevices();
       
       // 更新受影响设备的数据
-      const cachedDataForDevice = await loadFromCache(taskId, deviceId);
-      if (cachedDataForDevice) {
-        applyDeviceDataUpdate(deviceId, cachedDataForDevice);
-      }
+      applyDeviceDataUpdate(deviceId, mergedData);
 
       // 如果当前选中的设备有生成的数据，更新状态
       if (selectedDeviceId === deviceId) {
-        const cachedData = await loadFromCache(taskId, selectedDeviceId);
-        if (cachedData) {
-          applyDeviceDataUpdate(selectedDeviceId, cachedData);
-        }
+        applyDeviceDataUpdate(selectedDeviceId, mergedData);
       } else {
         // 如果没有选中设备或选中的不是当前设备，自动选择生成的设备
         setSelectedDeviceId(deviceId);
         setRenderDeviceIds((prev) => (prev.includes(deviceId) ? prev : [...prev, deviceId]));
       }
 
+      const deletedCount = existingData.length - filteredData.length;
+      const message = deletedCount > 0
+        ? `成功生成 ${generatedData.length} 条数据，已清除该设备在时间范围内的 ${deletedCount} 条旧数据`
+        : `成功生成 ${generatedData.length} 条数据到本地缓存`;
       setAlert({
         isOpen: true,
-        message: `成功生成 ${generatedData.length} 条数据到本地缓存，请点击"保存到服务器"按钮上传`,
+        message: `${message}，请点击"保存到服务器"按钮上传`,
         type: 'success',
       });
     } catch (error) {
+      console.error('生成数据失败:', error);
       setAlert({ isOpen: true, message: '生成数据失败', type: 'error' });
     }
   };
