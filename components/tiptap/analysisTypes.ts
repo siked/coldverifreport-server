@@ -1,4 +1,4 @@
-export type AnalysisTableType = 'deviceAnalysis' | 'terminalBinding' | 'intervalDuration';
+export type AnalysisTableType = 'deviceAnalysis' | 'terminalBinding' | 'intervalDuration' | 'certificate';
 
 export type DeviceAnalysisField = 'deviceId' | 'max' | 'min' | 'avg' | 'range';
 
@@ -35,5 +35,25 @@ export interface IntervalDurationConfig {
   maxRows: number;
 }
 
-export type AnalysisTableConfig = DeviceAnalysisConfig | TerminalBindingConfig | IntervalDurationConfig;
+export type CertificateAnalysisField =
+  | 'layoutNumber'
+  | 'locationTag'
+  | 'deviceNumber'
+  | 'certificateNumber'
+  | 'issueDate'
+  | 'expiryDate'
+  | 'validity';
+
+export interface CertificateAnalysisConfig {
+  tableType: 'certificate';
+  validationTagIds: string[];
+  certificateYear: string;
+  fields: CertificateAnalysisField[];
+}
+
+export type AnalysisTableConfig =
+  | DeviceAnalysisConfig
+  | TerminalBindingConfig
+  | IntervalDurationConfig
+  | CertificateAnalysisConfig;
 

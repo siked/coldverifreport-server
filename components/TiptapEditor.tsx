@@ -641,6 +641,8 @@ const formatTooltip = (payload: DataSourcePayload): string => {
         ? '测点设备分析表'
         : payload.tableType === 'terminalBinding'
         ? '终端与绑定点分析表'
+        : payload.tableType === 'certificate'
+        ? '校准证书表'
         : '区间所用时间分析表'
     }`;
   }
@@ -839,6 +841,7 @@ import { marked } from 'marked';
 import TurndownService from 'turndown';
 import imageCompression from 'browser-image-compression';
 import { getTaskDataFromLoki } from '@/lib/lokijs';
+import { getAllDeviceSns } from '@/lib/cache';
 import {
   Bold,
   Heading1,
@@ -3868,7 +3871,10 @@ const computeCurveChartInputSignature = (
   );
 
   const buildAnalysisTable = useCallback(
-    (config: AnalysisTableConfig): { html: string; payload: AnalysisTableDataSourceFromBuilder } => {
+    async (config: AnalysisTableConfig): Promise<{
+      html: string;
+      payload: AnalysisTableDataSourceFromBuilder;
+    }> => {
       if (!selectedTask?._id) {
         throw new Error('请先关联任务，再配置表格数据来源');
       }
@@ -3880,6 +3886,7 @@ const computeCurveChartInputSignature = (
         formatNumber,
         formatDateTimeForDisplay,
         getTaskDataFromLoki,
+        getAllDeviceSns,
         stringifyDataSource: (payload: AnalysisTableDataSourceFromBuilder) => stringifyDataSource(payload),
         formatTooltip: (payload: AnalysisTableDataSourceFromBuilder) => formatTooltip(payload),
       };
@@ -3891,20 +3898,20 @@ const computeCurveChartInputSignature = (
   );
 
   const applyAnalysisTable = useCallback(
-    (tablePos: number, config: AnalysisTableConfig) => {
+    async (tablePos: number, config: AnalysisTableConfig) => {
       if (!editor) return;
       const target = editor.state.doc.nodeAt(tablePos);
       if (!target || target.type.name !== 'table') {
         throw new Error('未找到需要替换的数据表格');
       }
-      const { html } = buildAnalysisTable(config);
+      const { html } = await buildAnalysisTable(config);
       editor.chain().focus().insertContentAt({ from: tablePos, to: tablePos + target.nodeSize }, html).run();
     },
     [buildAnalysisTable, editor]
   );
 
   const refreshAnalysisTables = useCallback(
-    (changed?: TemplateTag[]) => {
+    async (changed?: TemplateTag[]) => {
       if (!editor) return;
       const changedIds = changed?.map((t) => t._id).filter(Boolean) as string[] | undefined;
       const targets: Array<{ pos: number; payload: AnalysisTableDataSourceFromBuilder }> = [];
@@ -3923,13 +3930,14 @@ const computeCurveChartInputSignature = (
                     config.terminalTagId,
                     config.validationTagId,
                   ]
+                : config.tableType === 'certificate'
+                ? [...(config.validationTagIds || [])]
                 : [
                     config.startTagId,
                     config.endTagId,
                     ...(config.locationTagIds || []),
                   ];
-            const needUpdate =
-              !changedIds || relatedIds.some((id) => id && changedIds.includes(id));
+            const needUpdate = !changedIds || relatedIds.some((id) => id && changedIds.includes(id));
             if (needUpdate) {
               targets.push({ pos, payload });
             }
@@ -3938,13 +3946,13 @@ const computeCurveChartInputSignature = (
         return true;
       });
 
-      targets.forEach(({ pos, payload }) => {
+      for (const { pos, payload } of targets) {
         try {
-          applyAnalysisTable(pos, payload.config);
+          await applyAnalysisTable(pos, payload.config);
         } catch (err) {
           console.warn('刷新表格数据来源失败', err);
         }
-      });
+      }
     },
     [applyAnalysisTable, editor]
   );
@@ -4821,7 +4829,7 @@ const computeCurveChartInputSignature = (
     }
 
     // 刷新绑定了数据来源的表格
-    refreshAnalysisTables(changedTags);
+    void refreshAnalysisTables(changedTags);
 
     prevTagsRef.current = tags;
   }, [tags, editor, formatTagValue, calculateValue, refreshAnalysisTables]);

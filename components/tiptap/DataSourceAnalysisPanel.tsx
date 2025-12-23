@@ -1,7 +1,16 @@
 import React, { useMemo, useState, useRef, useEffect } from 'react';
-import { AnalysisTableConfig, AnalysisTableType, DeviceAnalysisConfig, DeviceAnalysisField, TerminalBindingConfig, IntervalDurationConfig } from './analysisTypes';
+import {
+  AnalysisTableConfig,
+  AnalysisTableType,
+  DeviceAnalysisConfig,
+  DeviceAnalysisField,
+  TerminalBindingConfig,
+  IntervalDurationConfig,
+  CertificateAnalysisConfig,
+  CertificateAnalysisField,
+} from './analysisTypes';
 import type { TemplateTag } from '../TemplateTagList';
-import { Database, Layers, Link as LinkIcon, Search, X, Palette, ChevronDown, Timer } from 'lucide-react';
+import { Database, Layers, Link as LinkIcon, Search, X, Palette, ChevronDown, Timer, FileText } from 'lucide-react';
 
 interface DataSourceAnalysisPanelProps {
   tags: TemplateTag[];
@@ -34,6 +43,12 @@ const datasetOptions: Array<{
     name: '区间所用时间分析表',
     description: '统计达到上限和下限所用时间，显示区间变化',
     icon: Timer,
+  },
+  {
+    id: 'certificate',
+    name: '校准证书表',
+    description: '按验证设备标签的SN匹配证书，按年份取最新记录',
+    icon: FileText,
   },
 ];
 
@@ -68,10 +83,49 @@ const defaultIntervalDurationConfig: IntervalDurationConfig = {
   maxRows: 10,
 };
 
+const defaultCertificateConfig: CertificateAnalysisConfig = {
+  tableType: 'certificate',
+  validationTagIds: [],
+  certificateYear: new Date().getFullYear().toString(),
+  fields: ['layoutNumber', 'locationTag', 'deviceNumber', 'certificateNumber', 'issueDate', 'expiryDate', 'validity'],
+};
+
 const getDefaultConfig = (type: AnalysisTableType, prev?: AnalysisTableConfig | null): AnalysisTableConfig => {
-  if (prev && prev.tableType === type) return prev;
+  if (prev && prev.tableType === type) {
+    // 如果是证书类型，确保字段列表包含所有默认字段
+    if (type === 'certificate') {
+      const certConfig = prev as CertificateAnalysisConfig;
+      const defaultFields = defaultCertificateConfig.fields;
+      const mergedFields = [...defaultFields];
+      // 添加用户选择的其他字段
+      if (certConfig.fields) {
+        certConfig.fields.forEach((field) => {
+          if (!mergedFields.includes(field)) {
+            mergedFields.push(field);
+          }
+        });
+      }
+      // 确保布局编号在最前面，设备编号在第二位，布点区域在最后
+      const orderedFields: CertificateAnalysisField[] = ['layoutNumber', 'deviceNumber'];
+      mergedFields.forEach((field) => {
+        if (field !== 'layoutNumber' && field !== 'locationTag' && field !== 'deviceNumber') {
+          orderedFields.push(field);
+        }
+      });
+      // 将布点区域移到最后
+      if (mergedFields.includes('locationTag')) {
+        orderedFields.push('locationTag');
+      }
+      return {
+        ...certConfig,
+        fields: orderedFields,
+      };
+    }
+    return prev;
+  }
   if (type === 'deviceAnalysis') return defaultDeviceConfig;
   if (type === 'terminalBinding') return defaultTerminalConfig;
+  if (type === 'certificate') return defaultCertificateConfig;
   return defaultIntervalDurationConfig;
 };
 
@@ -92,12 +146,23 @@ export default function DataSourceAnalysisPanel({
   const [intervalDurationConfig, setIntervalDurationConfig] = useState<IntervalDurationConfig>(
     getDefaultConfig('intervalDuration', initialConfig) as IntervalDurationConfig
   );
+  const [certificateConfig, setCertificateConfig] = useState<CertificateAnalysisConfig>(
+    getDefaultConfig('certificate', initialConfig) as CertificateAnalysisConfig
+  );
   const [showDropdown, setShowDropdown] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState('');
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const locationTags = useMemo(() => tags.filter((t) => t.type === 'location'), [tags]);
   const timeTags = useMemo(() => tags.filter((t) => t.type === 'date' || t.type === 'datetime'), [tags]);
+  const certificateYears = useMemo(() => {
+    const current = new Date().getFullYear();
+    const years: string[] = [];
+    for (let y = 2025; y <= current; y++) {
+      years.unshift(String(y));
+    }
+    return years;
+  }, []);
 
   const filteredDatasets = useMemo(() => {
     if (!searchKeyword.trim()) return datasetOptions;
@@ -137,12 +202,36 @@ export default function DataSourceAnalysisPanel({
     });
   };
 
+  const handleToggleCertificateField = (field: CertificateAnalysisField) => {
+    setCertificateConfig((prev) => {
+      const exists = prev.fields.includes(field);
+      const nextFields = exists ? prev.fields.filter((f) => f !== field) : [...prev.fields, field];
+      // 确保布局编号和设备编号始终保留在最前面，布点区域在最后
+      if (!nextFields.includes('layoutNumber')) {
+        nextFields.unshift('layoutNumber');
+      }
+      if (!nextFields.includes('deviceNumber')) {
+        const layoutIndex = nextFields.indexOf('layoutNumber');
+        nextFields.splice(layoutIndex + 1, 0, 'deviceNumber');
+      }
+      // 将布点区域移到最后
+      if (nextFields.includes('locationTag')) {
+        const locationTagIndex = nextFields.indexOf('locationTag');
+        nextFields.splice(locationTagIndex, 1);
+        nextFields.push('locationTag');
+      }
+      return { ...prev, fields: nextFields };
+    });
+  };
+
   const handleApply = () => {
     let config: AnalysisTableConfig;
     if (selectedType === 'deviceAnalysis') {
       config = deviceConfig;
     } else if (selectedType === 'terminalBinding') {
       config = terminalConfig;
+    } else if (selectedType === 'certificate') {
+      config = certificateConfig;
     } else {
       config = intervalDurationConfig;
     }
@@ -282,6 +371,8 @@ export default function DataSourceAnalysisPanel({
                             setDeviceConfig((prev) => ({ ...getDefaultConfig('deviceAnalysis'), ...prev }));
                           } else if (filteredDatasets[0].id === 'terminalBinding') {
                             setTerminalConfig((prev) => ({ ...getDefaultConfig('terminalBinding'), ...prev }));
+                          } else if (filteredDatasets[0].id === 'certificate') {
+                            setCertificateConfig((prev) => ({ ...getDefaultConfig('certificate'), ...prev }));
                           } else {
                             setIntervalDurationConfig((prev) => ({ ...getDefaultConfig('intervalDuration'), ...prev }));
                           }
@@ -311,6 +402,8 @@ export default function DataSourceAnalysisPanel({
                               setDeviceConfig((prev) => ({ ...getDefaultConfig('deviceAnalysis'), ...prev }));
                             } else if (item.id === 'terminalBinding') {
                               setTerminalConfig((prev) => ({ ...getDefaultConfig('terminalBinding'), ...prev }));
+                            } else if (item.id === 'certificate') {
+                              setCertificateConfig((prev) => ({ ...getDefaultConfig('certificate'), ...prev }));
                             } else {
                               setIntervalDurationConfig((prev) => ({ ...getDefaultConfig('intervalDuration'), ...prev }));
                             }
@@ -363,7 +456,33 @@ export default function DataSourceAnalysisPanel({
             </div>
 
             <div className="space-y-2">
-              <p className="text-xs text-gray-500">选择布点标签（多选，空值会被忽略）</p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-gray-500">选择布点标签（多选，空值会被忽略）</p>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allIds = locationTags.map((tag) => tag._id || tag.name);
+                      setDeviceConfig((prev) => ({ ...prev, locationTagIds: allIds }));
+                    }}
+                    className="text-xs px-2 py-1 border rounded hover:bg-gray-50 text-gray-700"
+                  >
+                    全选
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allIds = locationTags.map((tag) => tag._id || tag.name);
+                      const currentIds = deviceConfig.locationTagIds;
+                      const reversedIds = allIds.filter((id) => !currentIds.includes(id));
+                      setDeviceConfig((prev) => ({ ...prev, locationTagIds: reversedIds }));
+                    }}
+                    className="text-xs px-2 py-1 border rounded hover:bg-gray-50 text-gray-700"
+                  >
+                    反选
+                  </button>
+                </div>
+              </div>
               {renderLocationSelector(deviceConfig.locationTagIds, (ids) => setDeviceConfig((prev) => ({ ...prev, locationTagIds: ids })), true)}
             </div>
 
@@ -481,6 +600,91 @@ export default function DataSourceAnalysisPanel({
               )}
             </div>
           </div>
+        ) : selectedType === 'certificate' ? (
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-gray-500">选择验证设备标签（多选，标签值不能为空）</p>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allIds = locationTags.map((tag) => tag._id || tag.name);
+                      setCertificateConfig((prev) => ({ ...prev, validationTagIds: allIds }));
+                    }}
+                    className="text-xs px-2 py-1 border rounded hover:bg-gray-50 text-gray-700"
+                  >
+                    全选
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allIds = locationTags.map((tag) => tag._id || tag.name);
+                      const currentIds = certificateConfig.validationTagIds;
+                      const reversedIds = allIds.filter((id) => !currentIds.includes(id));
+                      setCertificateConfig((prev) => ({ ...prev, validationTagIds: reversedIds }));
+                    }}
+                    className="text-xs px-2 py-1 border rounded hover:bg-gray-50 text-gray-700"
+                  >
+                    反选
+                  </button>
+                </div>
+              </div>
+              {renderLocationSelector(
+                certificateConfig.validationTagIds,
+                (ids) => setCertificateConfig((prev) => ({ ...prev, validationTagIds: ids })),
+                true,
+                'certificate-validation-tags'
+              )}
+            </div>
+
+            <div className="space-y-1">
+              <p className="text-xs text-gray-500">选择证书年份</p>
+              <select
+                value={certificateConfig.certificateYear}
+                onChange={(e) =>
+                  setCertificateConfig((prev) => ({
+                    ...prev,
+                    certificateYear: e.target.value || new Date().getFullYear().toString(),
+                  }))
+                }
+                className="w-full border rounded px-2 py-1 text-sm"
+              >
+                {certificateYears.map((year) => (
+                  <option key={year} value={year}>
+                    {year}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-400">年份范围：2025 ~ 当前年份，默认当前年份。</p>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs text-gray-500">数据集字段（默认保留全部字段）</p>
+              <div className="flex flex-wrap gap-3 text-sm">
+                {(
+                  [
+                    { id: 'layoutNumber', label: '布局编号' },
+                    { id: 'deviceNumber', label: '设备编号' },
+                    { id: 'certificateNumber', label: '证书编号' },
+                    { id: 'issueDate', label: '签发日期' },
+                    { id: 'expiryDate', label: '到期时间' },
+                    { id: 'validity', label: '证书有效期' },
+                    { id: 'locationTag', label: '布点区域' },
+                  ] as Array<{ id: CertificateAnalysisField; label: string }>
+                ).map((item) => (
+                  <label key={item.id} className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={certificateConfig.fields.includes(item.id)}
+                      onChange={() => handleToggleCertificateField(item.id)}
+                    />
+                    <span>{item.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
         ) : (
           <div className="space-y-4">
             <div className="space-y-1">
@@ -510,7 +714,33 @@ export default function DataSourceAnalysisPanel({
             </div>
 
             <div className="space-y-2">
-              <p className="text-xs text-gray-500">选择布点标签（多选，多个布点用 | 分割，标签值不能为空）</p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-gray-500">选择布点标签（多选，多个布点用 | 分割，标签值不能为空）</p>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allIds = locationTags.map((tag) => tag._id || tag.name);
+                      setIntervalDurationConfig((prev) => ({ ...prev, locationTagIds: allIds }));
+                    }}
+                    className="text-xs px-2 py-1 border rounded hover:bg-gray-50 text-gray-700"
+                  >
+                    全选
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const allIds = locationTags.map((tag) => tag._id || tag.name);
+                      const currentIds = intervalDurationConfig.locationTagIds;
+                      const reversedIds = allIds.filter((id) => !currentIds.includes(id));
+                      setIntervalDurationConfig((prev) => ({ ...prev, locationTagIds: reversedIds }));
+                    }}
+                    className="text-xs px-2 py-1 border rounded hover:bg-gray-50 text-gray-700"
+                  >
+                    反选
+                  </button>
+                </div>
+              </div>
               {renderLocationSelector(intervalDurationConfig.locationTagIds, (ids) => setIntervalDurationConfig((prev) => ({ ...prev, locationTagIds: ids })), true)}
             </div>
 

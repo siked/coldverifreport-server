@@ -5,6 +5,8 @@ import type {
   DeviceAnalysisConfig,
   DeviceAnalysisField,
   IntervalDurationConfig,
+  CertificateAnalysisConfig,
+  CertificateAnalysisField,
   TerminalBindingConfig,
 } from './analysisTypes';
 
@@ -27,6 +29,7 @@ type HelperFunctions = {
   formatNumber: (value: number | null | undefined, decimals?: number) => string;
   formatDateTimeForDisplay: (date: Date) => string;
   getTaskDataFromLoki: (taskId: string, start: Date, end: Date, deviceIds: string[]) => any[];
+  getAllDeviceSns: (taskId: string) => Promise<Record<string, string>>;
   stringifyDataSource: (payload: AnalysisTableDataSource) => string;
   formatTooltip: (payload: AnalysisTableDataSource) => string;
 };
@@ -39,11 +42,11 @@ export interface AnalysisTableBuildResult {
 
 // 分析表构建器接口
 export type AnalysisTableBuilder = (
-  config: AnalysisTableConfig,
+  config: any,
   taskId: string,
   tags: TemplateTag[],
   helpers: HelperFunctions
-) => AnalysisTableBuildResult;
+) => Promise<AnalysisTableBuildResult>;
 
 // 转义 HTML 属性
 const escapeAttr = (input: string) => input.replace(/"/g, '&quot;');
@@ -64,7 +67,7 @@ const validateTimeRange = (start: Date | null, end: Date | null): { startQuery: 
 /**
  * 测点设备分析表构建器
  */
-export const buildDeviceAnalysisTable: AnalysisTableBuilder = (
+export const buildDeviceAnalysisTable: AnalysisTableBuilder = async (
   config: DeviceAnalysisConfig,
   taskId: string,
   tags: TemplateTag[],
@@ -187,7 +190,7 @@ export const buildDeviceAnalysisTable: AnalysisTableBuilder = (
 /**
  * 区间所用时间分析表构建器
  */
-export const buildIntervalDurationTable: AnalysisTableBuilder = (
+export const buildIntervalDurationTable: AnalysisTableBuilder = async (
   config: IntervalDurationConfig,
   taskId: string,
   tags: TemplateTag[],
@@ -435,7 +438,7 @@ export const buildIntervalDurationTable: AnalysisTableBuilder = (
 /**
  * 终端与验证设备并排表构建器
  */
-export const buildTerminalBindingTable: AnalysisTableBuilder = (
+export const buildTerminalBindingTable: AnalysisTableBuilder = async (
   config: TerminalBindingConfig,
   taskId: string,
   tags: TemplateTag[],
@@ -529,6 +532,340 @@ export const buildTerminalBindingTable: AnalysisTableBuilder = (
 };
 
 /**
+ * 校准证书表构建器
+ */
+interface CertificateDevice {
+  _id: string;
+  deviceNumber: string;
+}
+
+interface CertificateItem {
+  _id?: string;
+  certificateNumber: string;
+  deviceId: string;
+  issueDate: string;
+  expiryDate: string;
+  pdfUrl?: string;
+}
+
+const formatValidity = (issueDate: string, expiryDate: string) => {
+  const start = new Date(issueDate);
+  const end = new Date(expiryDate);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return '—';
+  const diffMs = end.getTime() - start.getTime();
+  if (diffMs <= 0) return '0 天';
+  const days = Math.round(diffMs / (1000 * 60 * 60 * 24));
+  if (days % 365 === 0) {
+    const years = days / 365;
+    return `${years} 年`;
+  }
+  return `${days} 天`;
+};
+
+const defaultCertificateFields: CertificateAnalysisField[] = [
+  'layoutNumber',
+  'locationTag',
+  'deviceNumber',
+  'certificateNumber',
+  'issueDate',
+  'expiryDate',
+  'validity',
+];
+
+export const buildCertificateTable: AnalysisTableBuilder = async (
+  config: CertificateAnalysisConfig,
+  taskId: string,
+  tags: TemplateTag[],
+  helpers: HelperFunctions
+) => {
+  const { collectLocationValues, getAllDeviceSns, stringifyDataSource, formatTooltip } = helpers;
+
+  console.log('[校准证书表] 开始构建，配置:', {
+    validationTagIds: config.validationTagIds,
+    certificateYear: config.certificateYear,
+    fields: config.fields,
+    taskId,
+  });
+
+  const validationValues = collectLocationValues(config.validationTagIds, tags);
+  console.log('[校准证书表] 收集到的验证设备标签值（设备ID）:', validationValues);
+  
+  if (validationValues.length === 0) {
+    throw new Error('请选择验证设备标签，且标签值不能为空');
+  }
+
+  // 获取所有布点标签（location类型）
+  const locationTags = tags.filter((t) => t.type === 'location');
+  console.log('[校准证书表] 所有布点标签:', locationTags.map(t => ({ id: t._id || t.name, name: t.name, value: t.value })));
+
+  // 构建设备ID到布点标签名称的映射（只考虑所选验证设备标签中的设备ID）
+  const deviceIdToLocationTagsMap = new Map<string, string[]>();
+  const normalizeLocationValues = (raw: any): string[] => {
+    if (!raw) return [];
+    if (Array.isArray(raw)) {
+      return raw.map((v) => String(v).trim()).filter(Boolean);
+    }
+    return String(raw)
+      .split(/[|,，]/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  };
+
+  // 先为所有选中的设备ID初始化映射
+  validationValues.forEach((deviceId) => {
+    deviceIdToLocationTagsMap.set(deviceId, []);
+  });
+
+  // 将所选设备ID转换为Set，便于快速查找
+  const selectedDeviceIdSet = new Set(validationValues);
+  console.log('[校准证书表] 所选设备ID集合:', Array.from(selectedDeviceIdSet));
+
+  // 遍历所有布点标签，只找出所选设备ID属于哪些标签
+  // 但只考虑那些值完全由所选设备ID组成的布点标签
+  locationTags.forEach((tag) => {
+    const tagName = tag.name;
+    const tagValues = normalizeLocationValues(tag.value);
+    console.log(`[校准证书表] 布点标签 "${tagName}" 的值:`, tagValues);
+    
+    // 检查该布点标签的所有值是否都在所选设备ID中
+    // 如果布点标签包含未选择的设备ID，则跳过该标签
+    const allValuesInSelected = tagValues.every((value) => selectedDeviceIdSet.has(value));
+    
+    if (allValuesInSelected && tagValues.length > 0) {
+      // 该布点标签的所有值都在所选设备ID中，添加到对应设备ID的映射中
+      tagValues.forEach((deviceId) => {
+        if (selectedDeviceIdSet.has(deviceId)) {
+          const tagNames = deviceIdToLocationTagsMap.get(deviceId)!;
+          if (!tagNames.includes(tagName)) {
+            tagNames.push(tagName);
+          }
+        }
+      });
+      console.log(`[校准证书表] 布点标签 "${tagName}" 的所有值都在所选设备ID中，已添加到映射`);
+    } else {
+      console.log(`[校准证书表] 布点标签 "${tagName}" 包含未选择的设备ID，已跳过`);
+    }
+  });
+  console.log('[校准证书表] 所选设备ID到布点标签的映射:', Array.from(deviceIdToLocationTagsMap.entries()));
+
+  // 获取设备ID到SN的映射
+  const deviceSnMap = await getAllDeviceSns(taskId);
+  console.log('[校准证书表] 设备ID到SN的映射:', deviceSnMap);
+
+  // 将设备ID转换为SN
+  const validationSns: string[] = [];
+  const deviceIdToSnMap = new Map<string, string>(); // 用于后续查找设备ID对应的SN
+  const snToDeviceIdMap = new Map<string, string>(); // 用于后续查找SN对应的设备ID
+  for (const deviceId of validationValues) {
+    const sn = deviceSnMap[deviceId];
+    if (sn) {
+      validationSns.push(sn);
+      deviceIdToSnMap.set(deviceId, sn);
+      snToDeviceIdMap.set(sn, deviceId);
+      console.log(`[校准证书表] 设备ID "${deviceId}" 对应的SN: "${sn}"`);
+    } else {
+      console.warn(`[校准证书表] 设备ID "${deviceId}" 未找到对应的SN，将跳过`);
+    }
+  }
+
+  if (validationSns.length === 0) {
+    throw new Error('所选验证设备标签未找到对应的设备SN，请确认设备已设置SN');
+  }
+
+  console.log('[校准证书表] 转换后的验证设备SN列表:', validationSns);
+
+  const targetYear = config.certificateYear || String(new Date().getFullYear());
+  console.log('[校准证书表] 目标年份:', targetYear, '(类型:', typeof targetYear, ')');
+
+  const fetchDevices = async (): Promise<CertificateDevice[]> => {
+    const res = await fetch('/api/devices');
+    if (!res.ok) {
+      throw new Error('获取设备列表失败，请检查登录状态或网络');
+    }
+    const data = await res.json();
+    return (data.devices || []) as CertificateDevice[];
+  };
+
+  const fetchCertificates = async (deviceId: string): Promise<CertificateItem[]> => {
+    const res = await fetch(`/api/certificates?deviceId=${encodeURIComponent(deviceId)}`);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.certificates || []) as CertificateItem[];
+  };
+
+  const devices = await fetchDevices();
+  console.log('[校准证书表] 获取到的设备列表总数:', devices.length);
+  console.log('[校准证书表] 设备列表详情:', devices.map(d => ({ _id: d._id, deviceNumber: d.deviceNumber })));
+  
+  const deviceMap = new Map<string, CertificateDevice>();
+  devices.forEach((d) => deviceMap.set(d.deviceNumber, d));
+  console.log('[校准证书表] 设备映射表（deviceNumber -> _id）:', Array.from(deviceMap.entries()).map(([k, v]) => ({ deviceNumber: k, deviceId: v._id })));
+
+  const rows: Array<Record<CertificateAnalysisField, string>> = [];
+
+  for (const sn of validationSns) {
+    console.log(`[校准证书表] 处理验证设备SN: "${sn}"`);
+    const device = deviceMap.get(sn);
+    if (!device) {
+      console.warn(`[校准证书表] SN "${sn}" 未在设备列表中找到匹配的设备`);
+      console.log('[校准证书表] 可用的设备编号:', Array.from(deviceMap.keys()));
+      continue;
+    }
+    console.log(`[校准证书表] SN "${sn}" 匹配到设备:`, { _id: device._id, deviceNumber: device.deviceNumber });
+
+    const certificates = await fetchCertificates(device._id);
+    console.log(`[校准证书表] 设备 "${device.deviceNumber}" (ID: ${device._id}) 的证书总数:`, certificates.length);
+    console.log(`[校准证书表] 证书列表详情:`, certificates.map(c => ({
+      certificateNumber: c.certificateNumber,
+      issueDate: c.issueDate,
+      expiryDate: c.expiryDate,
+      issueYear: new Date(c.issueDate).getFullYear(),
+    })));
+
+    const filteredByYear = certificates.filter((c) => {
+      const issueYear = new Date(c.issueDate).getFullYear();
+      const yearMatch = String(issueYear) === targetYear;
+      console.log(`[校准证书表] 证书 "${c.certificateNumber}" 签发日期: ${c.issueDate}, 年份: ${issueYear} (类型: ${typeof issueYear}), 目标年份: ${targetYear} (类型: ${typeof targetYear}), 匹配: ${yearMatch}`);
+      return yearMatch;
+    });
+    console.log(`[校准证书表] 年份 ${targetYear} 过滤后的证书数:`, filteredByYear.length);
+
+    const latest = filteredByYear
+      .sort(
+        (a, b) =>
+          new Date(b.issueDate).getTime() - new Date(a.issueDate).getTime() ||
+          new Date(b.expiryDate).getTime() - new Date(a.expiryDate).getTime()
+      )[0];
+
+    if (!latest) {
+      console.warn(`[校准证书表] SN "${sn}" 在年份 ${targetYear} 未找到证书`);
+      continue;
+    }
+
+    console.log(`[校准证书表] SN "${sn}" 找到最新证书:`, {
+      certificateNumber: latest.certificateNumber,
+      issueDate: latest.issueDate,
+      expiryDate: latest.expiryDate,
+    });
+
+    // 获取对应的设备ID作为布局编号
+    const layoutNumber = snToDeviceIdMap.get(sn) || '';
+    
+    // 获取该设备ID关联的布点标签名称，用 | 连接
+    const locationTagNames = deviceIdToLocationTagsMap.get(layoutNumber) || [];
+    const locationTag = locationTagNames.join('|');
+
+    rows.push({
+      layoutNumber: layoutNumber,
+      locationTag: locationTag,
+      deviceNumber: device.deviceNumber,
+      certificateNumber: latest.certificateNumber,
+      issueDate: latest.issueDate,
+      expiryDate: latest.expiryDate,
+      validity: formatValidity(latest.issueDate, latest.expiryDate),
+    });
+  }
+
+  console.log('[校准证书表] 最终生成的行数:', rows.length);
+  console.log('[校准证书表] 最终数据:', rows);
+
+  if (rows.length === 0) {
+    const hintDeviceIds = validationValues.slice(0, 3).join('、') || '（未填写）';
+    const hintMore = validationValues.length > 3 ? ` 等${validationValues.length}个` : '';
+    const hintSns = validationSns.slice(0, 3).join('、') || '（未找到SN）';
+    throw new Error(
+      `所选验证设备在 ${targetYear} 年未找到校准证书数据，请确认：\n` +
+        `1) 验证设备标签的值（设备ID）: ${hintDeviceIds}${hintMore}\n` +
+        `2) 对应的设备SN: ${hintSns}${validationSns.length > 3 ? ` 等${validationSns.length}个` : ''}\n` +
+        `3) 设备SN是否与证书表中的设备编号匹配；\n` +
+        `4) 该年份是否已上传证书；\n` +
+        `5) 证书签发日期是否填在对应年份。`
+    );
+  }
+
+  // 确保所有默认字段都存在
+  const userFields = config.fields && config.fields.length > 0 ? Array.from(new Set(config.fields)) : [];
+  const allFields: CertificateAnalysisField[] = [];
+  
+  // 始终包含所有默认字段
+  defaultCertificateFields.forEach((field) => {
+    if (!allFields.includes(field)) {
+      allFields.push(field);
+    }
+  });
+  
+  // 如果用户选择了其他字段，也添加进去
+  userFields.forEach((field) => {
+    if (!allFields.includes(field)) {
+      allFields.push(field);
+    }
+  });
+  
+  // 确保布局编号在最前面，设备编号在第二位，布点区域在最后
+  const orderedFields: CertificateAnalysisField[] = [];
+  
+  // 1. 先添加布局编号
+  if (allFields.includes('layoutNumber')) {
+    orderedFields.push('layoutNumber');
+  }
+  
+  // 2. 添加设备编号
+  if (allFields.includes('deviceNumber')) {
+    orderedFields.push('deviceNumber');
+  }
+  
+  // 3. 添加其他字段（除了布局编号、设备编号和布点区域）
+  allFields.forEach((field) => {
+    if (field !== 'layoutNumber' && field !== 'deviceNumber' && field !== 'locationTag') {
+      if (!orderedFields.includes(field)) {
+        orderedFields.push(field);
+      }
+    }
+  });
+  
+  // 4. 最后添加布点区域
+  if (allFields.includes('locationTag')) {
+    orderedFields.push('locationTag');
+  }
+  
+  // 使用排序后的字段列表
+  const fields = orderedFields;
+
+  const labelMap: Record<CertificateAnalysisField, string> = {
+    layoutNumber: '布局编号',
+    locationTag: '布点区域',
+    deviceNumber: '设备编号',
+    certificateNumber: '证书编号',
+    issueDate: '签发日期',
+    expiryDate: '到期时间',
+    validity: '证书有效期',
+  };
+
+  const headerHtml = fields.map((f) => `<th>${labelMap[f]}</th>`).join('');
+  const bodyHtml =
+    rows.length > 0
+      ? rows
+          .map((row) => {
+            const cells = fields.map((f) => `<td>${row[f] || '—'}</td>`).join('');
+            return `<tr>${cells}</tr>`;
+          })
+          .join('')
+      : `<tr><td colspan="${fields.length}" style="text-align:center;">无数据</td></tr>`;
+
+  const payload: AnalysisTableDataSource = {
+    type: 'analysisTable',
+    tableType: 'certificate',
+    config: { ...config, fields },
+    summary: { deviceCount: rows.length, rowCount: rows.length },
+    lastUpdatedAt: new Date().toISOString(),
+  };
+  const dataSourceAttr = stringifyDataSource(payload);
+  const tooltip = escapeAttr(formatTooltip(payload));
+  const html = `<table data-source="${dataSourceAttr}" data-source-type="analysisTable" title="${tooltip}"><thead><tr>${headerHtml}</tr></thead><tbody>${bodyHtml}</tbody></table>`;
+  return { html, payload };
+};
+
+/**
  * 分析表构建器映射表
  * 添加新的分析表类型时，只需在此注册即可
  */
@@ -536,17 +873,18 @@ export const analysisTableBuilders: Record<AnalysisTableType, AnalysisTableBuild
   deviceAnalysis: buildDeviceAnalysisTable,
   intervalDuration: buildIntervalDurationTable,
   terminalBinding: buildTerminalBindingTable,
+  certificate: buildCertificateTable,
 };
 
 /**
  * 统一的分析表构建入口
  */
-export const buildAnalysisTable = (
+export const buildAnalysisTable = async (
   config: AnalysisTableConfig,
   taskId: string,
   tags: TemplateTag[],
   helpers: HelperFunctions
-): AnalysisTableBuildResult => {
+): Promise<AnalysisTableBuildResult> => {
   const builder = analysisTableBuilders[config.tableType];
   if (!builder) {
     throw new Error(`不支持的分析表类型: ${(config as any).tableType}`);
